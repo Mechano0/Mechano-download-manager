@@ -1,0 +1,1 @@
+Microsoft.Web.WebView2.Core.dll, Microsoft.Web.WebView2.WinForms.dll and WebView2Loader.dll (version 1.0.1343.22) are redistributable files of the Microsoft WebView2 SDK. License: https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.1343.22/License . The WebView2 Runtime itself is part of Windows 10/11 and is not included.

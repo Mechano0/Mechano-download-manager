@@ -1,0 +1,1302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mechano Download Manager</title>
+<link rel="icon" href="/favicon.ico">
+<script>
+  // Apply the saved theme before the page paints (no white flash in dark mode).
+  try { const t = localStorage.getItem('mdm.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+  /* ------------------------------------------------------------------ theme tokens
+     Light is the default; dark comes from Windows (Auto) or the 🌓 button (data-theme). */
+  :root {
+    color-scheme: light;
+    --bg: #e9edf2;          /* canvas */
+    --panel: #ffffff;       /* surfaces */
+    --raised: #f3f6f9;      /* inputs, table heads, hover */
+    --text: #142030;
+    --muted: #5d6b7c;
+    --line: #d5dce4;
+    --line-strong: #b9c3cf;
+    --accent: #2457d6;      /* cobalt: actions */
+    --accent-2: #1a45b0;
+    --accent-soft: #e3ebfd;
+    --ok: #1e9e55;          /* green: progress / done */
+    --warn: #a86a12;
+    --err: #c2362b;
+    --shadow: 0 1px 2px rgba(20, 32, 48, .06);
+    --pop: 0 12px 32px rgba(20, 32, 48, .18);
+    --track: #ffffff;       /* progress bar track (white) */
+    --track-line: #c4ccd6;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0d131a; --panel: #151d27; --raised: #1b2532; --text: #e4eaf1; --muted: #8c99a8;
+    --line: #263241; --line-strong: #344355; --accent: #6b95ff; --accent-2: #8eaeff; --accent-soft: #1d2b4a;
+    --ok: #34c474; --warn: #e0a43a; --err: #ff6b5e;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3); --pop: 0 14px 36px rgba(0, 0, 0, .55);
+    --track: #eef2f6; --track-line: #3a4757;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0d131a; --panel: #151d27; --raised: #1b2532; --text: #e4eaf1; --muted: #8c99a8;
+      --line: #263241; --line-strong: #344355; --accent: #6b95ff; --accent-2: #8eaeff; --accent-soft: #1d2b4a;
+      --ok: #34c474; --warn: #e0a43a; --err: #ff6b5e;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3); --pop: 0 14px 36px rgba(0, 0, 0, .55);
+      --track: #eef2f6; --track-line: #3a4757;
+    }
+  }
+
+  /* ------------------------------------------------------------------ base */
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text);
+    font-variant-numeric: tabular-nums; }
+  input, select, button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+  .muted { color: var(--muted); }
+  code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; background: var(--raised); padding: 1px 6px; border-radius: 5px; overflow-wrap: anywhere; }
+
+  /* ------------------------------------------------------------------ header */
+  header { display: flex; align-items: center; gap: 14px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 4; }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .brand-mark { width: 32px; height: 32px; flex: none; display: block; }
+  header h1 { font: 600 16px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; margin: 0; white-space: nowrap; letter-spacing: -.005em; }
+  header h1 span { color: var(--muted); font-weight: 400; }
+  header .stat { margin-left: auto; white-space: nowrap; font-size: 12px; color: var(--muted); padding: 4px 10px; border-radius: 99px; background: var(--raised); border: 1px solid var(--line); }
+  .upd { display: flex; align-items: center; gap: 6px; }
+  .upd-info { font-size: 11.5px; color: var(--muted); white-space: nowrap; text-align: right; line-height: 1.3; margin-right: 4px; }
+  .upd-info b { color: var(--text); font-weight: 600; }
+  /* round icon buttons: ⟳ ⏰ ⚙ 🌓 */
+  .upd-btn, .gear-btn { width: 34px; height: 34px; border-radius: 50%; padding: 0; display: grid; place-items: center; color: var(--muted);
+    background: transparent; border: 1px solid transparent; }
+  .upd-btn:hover, .gear-btn:hover { background: var(--raised); border-color: var(--line); color: var(--text); }
+  .upd-btn { color: var(--accent); }
+  .upd-btn svg, .gear-btn svg { width: 18px; height: 18px; }
+  .upd-btn.running svg { animation: spin 1s linear infinite; }
+  .upd-btn:disabled { cursor: progress; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .gear-btn.has-waiting { color: var(--accent); }
+  .gear-btn.on, .gear-btn.on.has-waiting { color: #fff; background: var(--accent); border-color: var(--accent); }
+  .theme-btn .i-sun, .theme-btn .i-moon, .theme-btn .i-auto { display: none; }
+  .theme-btn[data-mode="light"] .i-sun, .theme-btn[data-mode="dark"] .i-moon, .theme-btn[data-mode="auto"] .i-auto { display: block; }
+
+  /* ------------------------------------------------------------------ layout + panels */
+  main { max-width: 1180px; margin: 0 auto; padding: 18px 20px 40px; display: grid; gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .settings-card[hidden] { display: none; }
+  .settings-head { display: flex; align-items: center; justify-content: space-between; }
+  .settings-head h2 { font: 600 15px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; margin: 0; }
+
+  /* ------------------------------------------------------------------ controls */
+  input[type=text], input[type=url], input[type=number], input[type=datetime-local], input[type=time], select {
+    background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; min-width: 0; height: 34px; }
+  input:hover, select:hover { border-color: var(--line-strong); }
+  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); background: var(--panel); }
+  input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
+  button { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 13px; cursor: pointer; height: 34px; }
+  button:hover { border-color: var(--line-strong); background: var(--raised); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
+  :root[data-theme="dark"] button.primary, :root[data-theme="dark"] .gear-btn.on { color: #0d131a; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) button.primary, :root:not([data-theme="light"]) .gear-btn.on { color: #0d131a; } }
+  button.small { padding: 2px 9px; font-size: 12px; height: 26px; border-radius: 7px; }
+  label.inline { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+
+  /* ------------------------------------------------------------------ link bar (the main tool) */
+  .add-card { position: relative; padding: 16px 18px 30px; }
+  #addForm { gap: 8px; }
+  #url { flex: 1 1 360px; height: 44px; font-size: 15px; padding: 0 14px; border-radius: 10px; }
+  #addForm button { height: 44px; border-radius: 10px; padding: 0 16px; }
+  #addForm button.primary { padding: 0 22px; font-size: 15px; }
+  .add-card .row + .row, .add-card > .row { margin-top: 12px; }
+  .tools { font-size: 12px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+  .tools b.ok { color: var(--ok); } .tools b.no { color: var(--err); }
+  .collapse-btn { position: absolute; right: 10px; bottom: 6px; width: 28px; height: 20px; padding: 0; border-radius: 6px; border: 0;
+    display: grid; place-items: center; color: var(--muted); background: transparent; }
+  .collapse-btn:hover { color: var(--accent); background: var(--raised); }
+  .collapse-btn svg { width: 16px; height: 16px; transition: transform .2s; }
+  .add-card.collapsed .collapse-btn svg { transform: rotate(180deg); }
+  .add-card.collapsed .full-only { display: none !important; }
+  #inspect:not(:empty) { margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: var(--raised); border: 1px solid var(--line); }
+  #inspect p { margin: 0 0 6px; }
+  .pl-list { font-size: 12px; color: var(--muted); margin: 6px 0 0; padding-left: 20px; max-height: 160px; overflow: auto; }
+  table.formats { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+  table.formats td, table.formats th { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+  table.formats tr:hover td { background: var(--accent-soft); cursor: pointer; }
+
+  /* ------------------------------------------------------------------ download list */
+  .filters { display: inline-flex; gap: 2px; flex-wrap: wrap; padding: 3px; border-radius: 10px; background: var(--raised); border: 1px solid var(--line); }
+  .filters button { border: 0; background: transparent; color: var(--muted); height: 26px; border-radius: 7px; }
+  .filters button:hover { background: var(--panel); color: var(--text); }
+  .filters button.on { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: var(--shadow), 0 0 0 1px var(--line); }
+  .list-toggle { width: 30px; padding: 0; display: grid; place-items: center; color: var(--muted); }
+  .list-toggle:hover { color: var(--accent); }
+  .list-toggle svg { width: 16px; height: 16px; transition: transform .2s; }
+  .list-toggle.collapsed svg { transform: rotate(180deg); }
+  #jobs { margin-top: 10px !important; }
+  .job { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 2px; border-top: 1px solid var(--line); align-items: center; }
+  .job:first-child { border-top: 0; }
+  .job > div:first-child { min-width: 0; }
+  .name { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta { font-size: 11.5px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 1px; }
+  .badge { font-size: 10.5px; padding: 0 7px; border-radius: 99px; background: var(--raised); border: 1px solid var(--line); color: var(--muted); line-height: 16px; }
+  .actions { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+  .job .actions button.small { height: 24px; padding: 0 8px; font-size: 11.5px; }
+  .st-done { color: var(--ok); } .st-error { color: var(--err); } .st-paused { color: var(--warn); } .st-scheduled { color: var(--accent); }
+  .st-downloading::before, .st-done::before, .st-error::before, .st-paused::before, .st-scheduled::before, .st-queued::before {
+    content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: currentColor; vertical-align: 1px; }
+  .st-downloading { color: var(--accent); }
+  .st-queued { color: var(--muted); }
+  .more-row { display: block; width: 100%; height: 32px; margin-top: 6px; font-size: 12px; color: var(--accent); background: transparent;
+    border: 1px dashed var(--line-strong); border-radius: 9px; text-align: center; }
+  .more-row:hover { background: var(--accent-soft); border-style: solid; border-color: var(--accent); }
+  .empty { color: var(--muted); text-align: center; padding: 34px 0; }
+  .err { grid-column: 1 / -1; color: var(--err); font-size: 12px; overflow-wrap: anywhere; }
+  .log { grid-column: 1 / -1; font: 11px/1.45 "Cascadia Mono", Consolas, monospace; color: var(--muted); white-space: pre-wrap; max-height: 100px; overflow: auto;
+    display: none; background: var(--raised); border-radius: 8px; padding: 8px 10px; }
+  .job.showlog .log { display: block; }
+
+  /* Progress bar: white track, green = downloaded, percentage on top (kept white in dark mode too) */
+  .bar { grid-column: 1 / -1; height: 16px; background: var(--track); border: 1px solid var(--track-line); border-radius: 6px; overflow: hidden; position: relative; margin-top: 2px; }
+  .bar canvas { width: 100%; height: 100%; display: block; }
+  .bar .pct { position: absolute; inset: 0; display: grid; place-items: center; font: 700 11px/1 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color: #0f2a17; text-shadow: 0 0 3px #fff, 0 0 3px #fff; pointer-events: none; }
+
+  /* ------------------------------------------------------------------ settings + scheduler */
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 16px; margin-top: 14px; }
+  .grid2 label, .sched-grid label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
+  .sched-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 16px; margin-top: 14px; align-items: end; }
+  .days { display: flex; flex-wrap: wrap; gap: 6px; }
+  .days label { display: flex; align-items: center; gap: 5px; font-size: 12px; border: 1px solid var(--line); background: var(--raised); border-radius: 99px; padding: 4px 11px; cursor: pointer; }
+  .days label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+  .days input { margin: 0; }
+  .switch { display: flex !important; align-items: center; gap: 8px; font-size: 13px !important; color: var(--text) !important; font-weight: 600; height: 34px; }
+  .sched-status { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .tabs { display: flex; gap: 2px; margin-top: 12px; border-bottom: 1px solid var(--line); }
+  .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 0 14px; height: 36px; font-size: 13px; color: var(--muted); }
+  .tabs button:hover { color: var(--text); background: transparent; }
+  .tabs button.on { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
+  .tab-page[hidden] { display: none; }
+  .q-head { display: flex; align-items: center; gap: 8px; margin: 14px 0 10px; font-size: 13px; flex-wrap: wrap; }
+  .q-head input { width: 64px; }
+  .q-wrap { border: 1px solid var(--line); border-radius: 10px; max-height: 280px; overflow: auto; background: var(--panel); }
+  .q-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .q-table th { position: sticky; top: 0; background: var(--raised); text-align: left; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; color: var(--muted); }
+  .q-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .q-table tr:last-child td { border-bottom: 0; }
+  .q-table td.q-name { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+  .q-table tr[data-id] { cursor: pointer; }
+  .q-table tr[data-id]:hover td { background: var(--raised); }
+  .q-table tr[draggable="true"] td:first-child::before { content: '⋮⋮ '; color: var(--line-strong); }
+  .q-table tr.sel td, .q-table tr.sel:hover td { background: var(--accent-soft); }
+  .q-table tr.drag-over td { box-shadow: inset 0 2px 0 var(--accent); }
+  .q-table tr.running td { color: var(--ok); font-weight: 600; }
+  .q-empty { color: var(--muted); text-align: center; padding: 22px; font-size: 12px; }
+  .q-tools { display: flex; gap: 6px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .q-tools button { width: 36px; height: 32px; padding: 0; font-size: 16px; font-weight: 700; }
+  .q-tools .q-up, .q-tools .q-down { color: var(--warn); }
+  .q-tools .q-del { color: var(--err); }
+
+  /* ------------------------------------------------------------------ toasts + countdown */
+  .toast { position: fixed; right: 18px; bottom: 18px; max-width: min(420px, calc(100vw - 36px)); background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-left: 4px solid var(--ok); border-radius: 10px; padding: 11px 15px; box-shadow: var(--pop); font-size: 13px; z-index: 6; display: none; }
+  .toast.bad { border-left-color: var(--err); }
+  .action-banner { position: sticky; top: 55px; z-index: 3; display: none; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    background: #b42318; color: #fff; padding: 10px 20px; font-weight: 600; }
+  .action-banner.show { display: flex; }
+  .action-banner button { background: #fff; color: #b42318; border-color: #fff; font-weight: 700; }
+
+  /* ------------------------------------------------------------------ "New download" confirmation popup */
+  dialog.confirm { width: min(560px, calc(100vw - 32px)); border: 1px solid var(--line); border-radius: 14px; padding: 0;
+    background: var(--panel); color: var(--text); box-shadow: var(--pop); }
+  dialog.confirm::backdrop { background: rgba(10, 16, 24, .45); }
+  .cf-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  .cf-head img { width: 26px; height: 26px; }
+  .cf-head h2 { font: 600 15px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; margin: 0; }
+  .cf-head .count { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .cf-body { padding: 16px 18px; display: grid; gap: 12px; }
+  .cf-name { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+  .cf-sub { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .cf-url { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cf-folder { display: grid; gap: 6px; }
+  .cf-folder label { font-size: 12px; color: var(--muted); }
+  .cf-folder .row { flex-wrap: nowrap; }
+  .cf-folder input { flex: 1; min-width: 0; font-family: inherit; }
+  .cf-note { font-size: 12px; color: var(--warn); }
+  .cf-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); background: var(--raised); border-radius: 0 0 14px 14px; flex-wrap: wrap; }
+  .cf-foot .spacer { flex: 1; }
+  .cf-foot label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+
+  /* ================================================================== simple professional theme (v2)
+     Neutral greys, one blue, flat panels without shadows, quieter controls. Overrides the rules above. */
+  :root {
+    --bg: #f3f4f6; --panel: #ffffff; --raised: #f7f8fa; --text: #1f2328; --muted: #656d76;
+    --line: #e2e5e9; --line-strong: #cdd2d8; --accent: #1f5bd8; --accent-2: #174ab3; --accent-soft: #e8effc;
+    --ok: #1f9d55; --warn: #9a6700; --err: #cf222e; --shadow: none; --track: #ffffff; --track-line: #d0d5db;
+  }
+  :root[data-theme="dark"] {
+    --bg: #101214; --panel: #181b1f; --raised: #1f2328; --text: #e6e8eb; --muted: #959ca5;
+    --line: #2a2f35; --line-strong: #3a4047; --accent: #5b8def; --accent-2: #7ba4f3; --accent-soft: #1c2a44;
+    --ok: #3fb96a; --warn: #d29922; --err: #f2575f; --shadow: none; --track: #eceff2; --track-line: #3a4047;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101214; --panel: #181b1f; --raised: #1f2328; --text: #e6e8eb; --muted: #959ca5;
+      --line: #2a2f35; --line-strong: #3a4047; --accent: #5b8def; --accent-2: #7ba4f3; --accent-soft: #1c2a44;
+      --ok: #3fb96a; --warn: #d29922; --err: #f2575f; --shadow: none; --track: #eceff2; --track-line: #3a4047;
+    }
+  }
+  body { font-size: 13.5px; }
+  header { padding: 8px 20px; gap: 12px; }
+  header h1 { font-size: 15px; font-weight: 600; }
+  header h1 span { font-weight: 400; }
+  .brand-mark { width: 28px; height: 28px; }
+  header .stat { background: transparent; border: 0; padding: 0 6px; }
+  .upd-btn, .gear-btn { width: 32px; height: 32px; }
+  main { gap: 12px; padding: 16px 20px 32px; }
+  .card { border-radius: 10px; padding: 14px 16px; box-shadow: none; }
+  .add-card { padding: 14px 16px 28px; }
+  #url { height: 40px; font-size: 14px; border-radius: 8px; }
+  #addForm button { height: 40px; border-radius: 8px; padding: 0 14px; }
+  #addForm button.primary { padding: 0 20px; font-size: 14px; }
+  input[type=text], input[type=url], input[type=number], input[type=datetime-local], input[type=time], select { height: 32px; border-radius: 7px; background: var(--panel); }
+  button { height: 32px; border-radius: 7px; }
+  button.primary { font-weight: 600; }
+  label.inline { font-size: 12.5px; }
+  /* filters as quiet tabs */
+  .filters { background: transparent; border: 0; padding: 0; gap: 4px; }
+  .filters button { height: 28px; padding: 0 10px; border-radius: 6px; color: var(--muted); }
+  .filters button.on { background: var(--accent-soft); color: var(--accent); box-shadow: none; font-weight: 600; }
+  :root[data-theme="dark"] .filters button.on { color: #cfe0ff; }
+  /* rows */
+  .job { padding: 10px 0; gap: 4px 12px; }
+  .name { font-size: 13.5px; font-weight: 600; }
+  .meta { font-size: 12px; }
+  .badge { border: 0; background: var(--raised); font-size: 10.5px; }
+  .job .actions button.small { height: 26px; border-radius: 6px; background: transparent; }
+  .job .actions button.small:hover { background: var(--raised); }
+  .bar { height: 14px; border-radius: 7px; }
+  .bar .pct { font-size: 10.5px; }
+  dialog.confirm, .cf-foot { border-radius: 10px; }
+  .cf-foot { border-radius: 0 0 10px 10px; }
+
+  /* ------------------------------------------------------------------ tool status: hidden behind a small ⓘ button */
+  .add-card .tools { display: none; }
+  .add-card.show-tools .tools { display: flex; }
+  .add-card.collapsed .tools { display: none !important; }
+  .tools-btn { position: absolute; left: 10px; bottom: 6px; width: 22px; height: 20px; padding: 0; border: 0; border-radius: 6px;
+    display: grid; place-items: center; color: var(--muted); background: transparent; opacity: .7; }
+  .tools-btn:hover, .add-card.show-tools .tools-btn { opacity: 1; color: var(--accent); background: var(--raised); }
+  .tools-btn svg { width: 15px; height: 15px; }
+
+  /* ------------------------------------------------------------------ window frame
+     A thin frame around the app with a thicker bottom edge; in dark mode it glows softly. */
+  body { padding-bottom: 10px; }
+  .app-frame { position: fixed; inset: 0; pointer-events: none; z-index: 50;
+    border: 3px solid var(--line-strong); border-bottom-width: 10px; }
+  :root[data-theme="dark"] .app-frame {
+    border-color: #2d4f8f;
+    box-shadow: inset 0 0 14px rgba(91, 141, 239, .35), inset 0 -10px 22px rgba(91, 141, 239, .45), 0 0 0 1px rgba(123, 164, 243, .25);
+    animation: frame-glow 4s ease-in-out infinite;
+  }
+  :root[data-theme="dark"] .app-frame::after {
+    /* a light line along the bottom edge */
+    content: ''; position: absolute; left: 8%; right: 8%; bottom: -10px; height: 2px; border-radius: 2px;
+    background: linear-gradient(90deg, transparent, #7ba4f3, #b6ccff, #7ba4f3, transparent);
+    box-shadow: 0 0 10px 2px rgba(123, 164, 243, .6);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .app-frame {
+      border-color: #2d4f8f;
+      box-shadow: inset 0 0 14px rgba(91, 141, 239, .35), inset 0 -10px 22px rgba(91, 141, 239, .45), 0 0 0 1px rgba(123, 164, 243, .25);
+      animation: frame-glow 4s ease-in-out infinite;
+    }
+    :root:not([data-theme="light"]) .app-frame::after {
+      content: ''; position: absolute; left: 8%; right: 8%; bottom: -10px; height: 2px; border-radius: 2px;
+      background: linear-gradient(90deg, transparent, #7ba4f3, #b6ccff, #7ba4f3, transparent);
+      box-shadow: 0 0 10px 2px rgba(123, 164, 243, .6);
+    }
+  }
+  @keyframes frame-glow {
+    0%, 100% { box-shadow: inset 0 0 12px rgba(91, 141, 239, .28), inset 0 -10px 18px rgba(91, 141, 239, .38), 0 0 0 1px rgba(123, 164, 243, .2); }
+    50% { box-shadow: inset 0 0 20px rgba(91, 141, 239, .45), inset 0 -10px 28px rgba(91, 141, 239, .6), 0 0 0 1px rgba(123, 164, 243, .35); }
+  }
+
+  /* ------------------------------------------------------------------ playlist video list */
+  .pl-panel { grid-column: 1 / -1; display: none; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-top: 4px; }
+  .job.showvideos .pl-panel { display: block; }
+  .pl-scroll { max-height: 300px; overflow: auto; }
+  .pl-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .pl-table th { position: sticky; top: 0; background: var(--raised); color: var(--muted); font-weight: 600; text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); z-index: 1; }
+  .pl-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .pl-table tr:last-child td { border-bottom: 0; }
+  .pl-table td.t { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+  .pl-table td.n { color: var(--muted); width: 42px; }
+  .pl-table tr.now td { background: var(--accent-soft); font-weight: 600; }
+  .pl-table tr.skipped td.t, .pl-table tr.skipped td.n { color: var(--muted); text-decoration: line-through; }
+  .pl-table .s-done { color: var(--ok); } .pl-table .s-error { color: var(--err); } .pl-table .s-now { color: var(--accent); }
+  .pl-table td.mv { width: 64px; text-align: right; }
+  .pl-table td.mv button { height: 22px; width: 24px; padding: 0; font-size: 12px; border-radius: 5px; margin-left: 2px; }
+  .pl-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px; font-size: 12px; color: var(--muted); background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .pl-head b { color: var(--text); }
+
+  /* ------------------------------------------------------------------ small screens */
+  @media (max-width: 760px) { .upd-info, header .stat { display: none; } header h1 span { display: none; } }
+  @media (max-width: 640px) {
+    header { padding: 10px 14px; gap: 8px; } main { padding: 14px 16px 32px; }
+    .job { grid-template-columns: 1fr; } .actions { justify-content: flex-start; }
+    #addForm button { flex: 1 1 auto; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <img class="brand-mark" src="/logo.png?v=2" width="32" height="32" alt="">
+    <h1>Mechano <span>Download Manager</span></h1>
+  </div>
+  <span class="stat" id="totals"></span>
+  <div class="upd">
+    <div class="upd-info" id="updInfo">yt-dlp …</div>
+    <button class="upd-btn" id="updBtn" title="Update yt-dlp now (YouTube / Facebook fixes)" aria-label="Update yt-dlp now">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+    </button>
+    <button class="gear-btn" id="schedBtn" title="Scheduler" aria-label="Scheduler" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5"/><path d="M5 3L2 6"/><path d="M22 6l-3-3"/></svg>
+    </button>
+    <button class="gear-btn theme-btn" id="themeBtn" type="button" data-mode="auto" title="Theme: Auto (follows Windows)" aria-label="Theme: Auto">
+      <svg class="i-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>
+      <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+    </button>
+    <button class="gear-btn" id="gearBtn" title="Settings" aria-label="Settings" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </div>
+</header>
+<div class="toast" id="toast"></div>
+<div class="app-frame" aria-hidden="true"></div>
+<dialog class="confirm" id="confirmDlg" aria-labelledby="cfTitle">
+  <div class="cf-head">
+    <img src="/logo.png?v=2" alt="">
+    <h2 id="cfTitle">New download</h2>
+    <span class="count" id="cfCount"></span>
+  </div>
+  <div class="cf-body">
+    <div>
+      <div class="cf-name" id="cfName">…</div>
+      <div class="cf-sub"><span class="badge" id="cfKind"></span><span id="cfSize"></span></div>
+      <div class="cf-url" id="cfUrl"></div>
+    </div>
+    <div class="cf-folder" id="cfQualityRow" hidden>
+      <label for="cfQuality">Quality</label>
+      <select id="cfQuality"></select>
+    </div>
+    <div class="cf-folder">
+      <label for="cfFolder">Save to</label>
+      <div class="row">
+        <input type="text" id="cfFolder" spellcheck="false">
+        <button type="button" id="cfBrowse">Browse…</button>
+      </div>
+    </div>
+    <div class="cf-note" id="cfNote" hidden></div>
+  </div>
+  <div class="cf-foot">
+    <label><input type="checkbox" id="cfDontAsk"> Don't ask again</label>
+    <span class="spacer"></span>
+    <button type="button" id="cfCancel">Cancel</button>
+    <button type="button" id="cfLater">⏰ Later</button>
+    <button type="button" class="primary" id="cfStart">Start download</button>
+  </div>
+</dialog>
+<div class="action-banner" id="actionBanner" role="alert">
+  <span id="actionText"></span>
+  <button type="button" id="actionCancel">Cancel</button>
+</div>
+<main>
+  <section class="card settings-card" id="schedCard" hidden>
+    <div class="settings-head">
+      <h2>Scheduler</h2>
+      <button class="small" type="button" id="schedClose" aria-label="Close scheduler">✕</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin:6px 0 0">Add links with <b>Later</b> instead of Download. They wait here and start at the time you choose.</p>
+    <div class="tabs" role="tablist">
+      <button type="button" class="on" id="tabQueue" role="tab" aria-selected="true">Files in queue</button>
+      <button type="button" id="tabSched" role="tab" aria-selected="false">Schedule</button>
+    </div>
+    <div class="tab-page" id="pageQueue" role="tabpanel">
+      <div class="q-head">
+        <label for="qConcurrent">Download</label>
+        <input type="number" id="qConcurrent" min="1" max="20" value="2">
+        <span>files at the same time</span>
+      </div>
+      <div class="q-wrap">
+        <table class="q-table">
+          <thead><tr><th>#</th><th>File name</th><th>Size</th><th>Status</th><th>Time left</th></tr></thead>
+          <tbody id="qBody"></tbody>
+        </table>
+      </div>
+      <div class="q-tools">
+        <button type="button" class="q-down" id="qDown" title="Move down" aria-label="Move down">↓</button>
+        <button type="button" class="q-up" id="qUp" title="Move up" aria-label="Move up">↑</button>
+        <button type="button" class="q-del" id="qDel" title="Remove from the queue (does not delete anything)" aria-label="Remove from queue">✕</button>
+        <span class="muted" style="font-size:12px">Click a file, then ↑ ↓ — or drag it. Files download in this order.</span>
+      </div>
+    </div>
+    <form id="schedForm" class="tab-page" hidden>
+      <div class="sched-grid">
+        <label class="switch"><input type="checkbox" name="enabled"> Turn on the scheduler</label>
+        <label>Start downloading at <input type="time" name="start" required></label>
+        <label>Stop at (optional) <input type="time" name="stop"></label>
+        <label>When the scheduled downloads finish
+          <select name="after">
+            <option value="none">Do nothing</option>
+            <option value="sleep">Sleep</option>
+            <option value="hibernate">Hibernate</option>
+            <option value="restart">Restart the computer</option>
+            <option value="shutdown">Shut down the computer</option>
+          </select>
+        </label>
+      </div>
+      <div style="margin-top:12px">
+        <div class="muted" style="font-size:12px;margin-bottom:6px">Days (none ticked = every day)</div>
+        <div class="days" id="days">
+          <label><input type="checkbox" value="6"> Sat</label><label><input type="checkbox" value="0"> Sun</label>
+          <label><input type="checkbox" value="1"> Mon</label><label><input type="checkbox" value="2"> Tue</label>
+          <label><input type="checkbox" value="3"> Wed</label><label><input type="checkbox" value="4"> Thu</label>
+          <label><input type="checkbox" value="5"> Fri</label>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="primary" type="submit">Save schedule</button>
+      </div>
+    </form>
+    <div class="row" style="margin-top:12px; border-top:1px solid var(--line); padding-top:10px">
+      <button type="button" id="schedStartNow" class="primary">▶ Start now</button>
+      <button type="button" id="schedStop">■ Stop</button>
+    </div>
+    <div class="sched-status" id="schedStatus"></div>
+  </section>
+  <section class="card settings-card" id="settingsCard" hidden>
+    <div class="settings-head">
+      <h2>Settings</h2>
+      <button class="small" type="button" id="settingsClose" aria-label="Close settings">✕</button>
+    </div>
+      <form id="cfgForm" class="grid2">
+        <label title="Auto works for almost every link. Change it only if a link fails.">Download method for new links
+          <select id="kind">
+            <option value="auto">Auto (recommended)</option>
+            <option value="ytdlp">Media site: YouTube, Facebook… (yt-dlp)</option>
+            <option value="direct">Direct file, multi-connection</option>
+            <option value="hls">HLS stream (.m3u8)</option>
+          </select>
+        </label>
+        <label>Download folder <input type="text" name="downloadDir"></label>
+        <label>Simultaneous downloads <input type="number" name="maxConcurrent" min="1" max="20"></label>
+        <label>Connections per file <input type="number" name="connections" min="1" max="32"></label>
+        <label>Parallel HLS segments <input type="number" name="hlsConcurrency" min="1" max="32"></label>
+        <label>Speed limit, KB/s (0 = unlimited) <input type="number" name="speedLimitKBps" min="0"></label>
+        <label>yt-dlp path (blank = auto) <input type="text" name="ytdlpPath"></label>
+        <label>ffmpeg path (blank = auto) <input type="text" name="ffmpegPath"></label>
+        <label>Auto-update yt-dlp every … days (0 = off) <input type="number" name="autoUpdateDays" min="0" max="60"></label>
+        <label>yt-dlp update channel
+          <select name="ytdlpChannel"><option value="stable">Stable (recommended)</option><option value="nightly">Nightly (newest YouTube fixes first)</option></select>
+        </label>
+        <label style="align-content:end"><span><input type="checkbox" name="useCategories"> Sort into category folders (Video, Music, Compressed...)</span></label>
+        <label style="align-content:end"><span><input type="checkbox" name="confirmDownloads"> Ask before every download (shows where it will be saved)</span></label>
+        <label style="align-content:end"><span><input type="checkbox" name="showCompleteDialog"> Show a "Download complete" window with Open / Show in folder</span></label>
+        <div><button class="primary" type="submit">Save settings</button></div>
+      </form>
+      <p class="muted" style="font-size:12px">Browser extension token (only needed if automatic pairing fails): <code id="tok"></code></p>
+  </section>
+
+  <section class="card add-card" id="addCard">
+    <form id="addForm" class="row">
+      <input id="url" type="url" placeholder="YouTube / Facebook / Instagram / TikTok" required>
+      <button type="button" id="inspectBtn" class="full-only" title="See the qualities, size or playlist videos before downloading">Inspect</button>
+      <button class="primary" type="submit">Download</button>
+      <button type="button" id="laterBtn" class="full-only" title="Add to the scheduler: downloads at the scheduled time">⏰ Later</button>
+    </form>
+    <div class="row full-only" style="margin-top:10px">
+      <label class="inline">Connections <input id="conns" type="number" min="1" max="32" value="8" style="width:64px"></label>
+      <label class="inline">Max quality
+        <select id="quality"><option value="">Best</option><option>2160</option><option>1440</option><option>1080</option><option>720</option><option>480</option><option>360</option></select>
+      </label>
+      <label class="inline"><input id="audioOnly" type="checkbox"> Audio only</label>
+      <label class="inline" title="Download every video of a YouTube playlist into its own folder"><input id="playlist" type="checkbox"> Whole playlist</label>
+      <label class="inline">Start at <input id="startAt" type="datetime-local"></label>
+      <span class="muted" id="fmtChosen"></span>
+      <span class="muted" id="kindNote" style="font-size:12px"></span>
+    </div>
+    <div id="inspect" class="full-only"></div>
+    <div class="tools full-only" id="tools"></div>
+    <button class="tools-btn" type="button" id="toolsBtn" title="Show tool status (yt-dlp, ffmpeg)" aria-label="Show tool status" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.01"/></svg>
+    </button>
+    <button class="collapse-btn" type="button" id="collapseBtn" title="Show less" aria-label="Collapse the link area" aria-expanded="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>
+    </button>
+  </section>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <div class="filters" id="filters"></div>
+      <div class="row"><button class="small" id="pauseAll">Pause all</button><button class="small" id="resumeAll">Resume all</button><button class="small" id="clearDone">Clear finished</button><button class="small list-toggle" type="button" id="listToggle" title="Show fewer downloads" aria-label="Collapse the download list" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></button></div>
+    </div>
+    <div id="jobs" style="margin-top:6px"></div>
+  </section>
+
+</main>
+
+<script>
+const TOKEN = '__MDM_TOKEN__';
+const $ = (s) => document.querySelector(s);
+const jobs = new Map();
+let filter = 'all';
+let chosenFormat = null;
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? { headers: { 'x-mdm-token': TOKEN } } :
+    { method: 'POST', headers: { 'content-type': 'application/json', 'x-mdm-token': TOKEN }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+const fmtBytes = (n) => { if (n == null || !isFinite(n)) return '?'; const u = ['B','KB','MB','GB','TB']; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return n.toFixed(i ? 1 : 0) + ' ' + u[i]; };
+const fmtEta = (s) => s == null ? '' : s > 3600 ? `${Math.floor(s/3600)}h ${Math.floor(s%3600/60)}m` : s > 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`;
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+function spec() {
+  const s = { url: $('#url').value.trim(), kind: $('#kind').value, connections: Number($('#conns').value) || undefined };
+  if ($('#quality').value) s.maxHeight = Number($('#quality').value);
+  if ($('#audioOnly').checked) s.audioOnly = true;
+  if ($('#playlist').checked) { s.playlist = true; if (s.kind === 'auto') s.kind = 'ytdlp'; }
+  if ($('#startAt').value) s.startAt = new Date($('#startAt').value).toISOString();
+  if (chosenFormat) s.format = chosenFormat;
+  return s;
+}
+
+// ---------------------------------------------------------------- theme (🌓): Auto → Light → Dark
+const THEMES = { auto: 'Auto (follows Windows)', light: 'Light', dark: 'Dark' };
+function applyTheme(mode) {
+  if (!(mode in THEMES)) mode = 'auto';
+  if (mode === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = mode;
+  const b = document.getElementById('themeBtn');
+  b.dataset.mode = mode;
+  b.title = `Theme: ${THEMES[mode]}`;
+  b.setAttribute('aria-label', `Theme: ${THEMES[mode]}. Click to change`);
+  try { localStorage.setItem('mdm.theme', mode); } catch { /* private mode */ }
+  try { schedule(); } catch { /* first call runs before the list exists */ } // canvas bars: redraw with the new colours
+}
+document.getElementById('themeBtn').addEventListener('click', () => {
+  const order = ['auto', 'light', 'dark'];
+  const next = order[(order.indexOf(document.getElementById('themeBtn').dataset.mode) + 1) % order.length];
+  applyTheme(next);
+  showToast(`Theme: ${THEMES[next]}`);
+});
+applyTheme((() => { try { return localStorage.getItem('mdm.theme'); } catch { return null; } })() || 'auto');
+
+// ---------------------------------------------------------------- settings (⚙) and collapse arrow
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode etc. */ } },
+};
+function setSettingsOpen(open) {
+  $('#settingsCard').hidden = !open;
+  $('#gearBtn').classList.toggle('on', open);
+  $('#gearBtn').setAttribute('aria-expanded', String(open));
+  if (open) window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+$('#gearBtn').addEventListener('click', () => setSettingsOpen($('#settingsCard').hidden));
+$('#settingsClose').addEventListener('click', () => setSettingsOpen(false));
+
+function setCollapsed(c) {
+  $('#addCard').classList.toggle('collapsed', c);
+  $('#collapseBtn').title = c ? 'Show all options' : 'Show less';
+  $('#collapseBtn').setAttribute('aria-expanded', String(!c));
+  store.set('mdm.collapsed', c ? '1' : '0');
+}
+$('#collapseBtn').addEventListener('click', () => setCollapsed(!$('#addCard').classList.contains('collapsed')));
+setCollapsed(store.get('mdm.collapsed') === '1');
+$('#listToggle').addEventListener('click', () => setListCollapsed(!listCollapsed));
+
+// ⓘ: show / hide the tool status line (yt-dlp, ffmpeg, JS runtime)
+function setToolsShown(show) {
+  $('#addCard').classList.toggle('show-tools', show);
+  $('#toolsBtn').setAttribute('aria-expanded', String(show));
+  $('#toolsBtn').title = show ? 'Hide tool status' : 'Show tool status (yt-dlp, ffmpeg)';
+  store.set('mdm.showTools', show ? '1' : '0');
+}
+$('#toolsBtn').addEventListener('click', () => setToolsShown(!$('#addCard').classList.contains('show-tools')));
+setToolsShown(store.get('mdm.showTools') === '1');
+
+// ---------------------------------------------------------------- scheduler (⏰)
+let sched = null;
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const fmtWhen = (ms) => {
+  const d = new Date(ms), now = new Date();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  if (d.toDateString() === now.toDateString()) return `today ${time}`;
+  if (d.toDateString() === tomorrow.toDateString()) return `tomorrow ${time}`;
+  return `${DAY_NAMES[d.getDay()]} ${time}`;
+};
+
+function setSchedOpen(open) {
+  $('#schedCard').hidden = !open;
+  $('#schedBtn').classList.toggle('on', open);
+  $('#schedBtn').setAttribute('aria-expanded', String(open));
+  if (open) window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+$('#schedBtn').addEventListener('click', () => setSchedOpen($('#schedCard').hidden));
+$('#schedClose').addEventListener('click', () => setSchedOpen(false));
+
+let schedFormFilled = false;
+function fillSchedForm(s) {
+  const f = $('#schedForm');
+  f.elements.enabled.checked = !!s.enabled;
+  f.elements.start.value = s.start || '02:00';
+  f.elements.stop.value = s.stop || '';
+  f.elements.after.value = s.after || 'none';
+  for (const cb of $('#days').querySelectorAll('input')) cb.checked = (s.days || []).includes(Number(cb.value));
+  if (document.activeElement !== $('#qConcurrent')) $('#qConcurrent').value = s.concurrent || 2;
+  schedFormFilled = true;
+}
+
+let countdownTimer = null;
+function renderSchedule(s) {
+  sched = s;
+  if (!schedFormFilled) fillSchedForm(s);
+  const parts = [];
+  if (s.running) parts.push(`<b>Downloading scheduled items:</b> ${s.runDone} of ${s.runTotal} finished`);
+  parts.push(`${s.waiting} download${s.waiting === 1 ? '' : 's'} waiting`);
+  if (s.enabled && s.nextStart) parts.push(`next start <b>${esc(fmtWhen(s.nextStart))}</b>${s.stop ? ` (stops at ${esc(s.stop)})` : ''}`);
+  if (!s.enabled) parts.push('scheduler is <b>off</b>');
+  if (s.after !== 'none') parts.push(`then: <b>${esc(s.actions[s.after])}</b>`);
+  if (s.lastAction && s.lastAction.error) parts.push(`<span class="st-error">Last action failed: ${esc(s.lastAction.error)}</span>`);
+  $('#schedStatus').innerHTML = parts.join(' · ');
+  $('#schedBtn').classList.toggle('has-waiting', s.waiting > 0 || s.running);
+  // Red countdown bar before shut down / restart / sleep / hibernate
+  clearInterval(countdownTimer);
+  const p = s.pendingAction;
+  $('#actionBanner').classList.toggle('show', !!p);
+  if (p) {
+    const tick = () => {
+      const secs = Math.max(0, Math.round((p.at - Date.now()) / 1000));
+      $('#actionText').textContent = `Scheduled downloads finished. ${p.label} in ${secs} seconds…`;
+    };
+    tick();
+    countdownTimer = setInterval(tick, 1000);
+  }
+  schedule(); // job rows show "starts tomorrow 02:00"
+}
+
+$('#schedForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const body = {
+    enabled: f.elements.enabled.checked, start: f.elements.start.value, stop: f.elements.stop.value,
+    after: f.elements.after.value, days: [...$('#days').querySelectorAll('input:checked')].map((c) => Number(c.value)),
+  };
+  if (['shutdown', 'restart'].includes(body.after) && !confirm(`After the scheduled downloads finish, the computer will ${body.after === 'shutdown' ? 'SHUT DOWN' : 'RESTART'} (you get 60 seconds to cancel). Save?`)) return;
+  try {
+    const s = await api('/api/schedule', body);
+    schedFormFilled = false;
+    renderSchedule(s);
+    showToast(s.enabled ? `Scheduler on · next start ${fmtWhen(s.nextStart)}` : 'Scheduler saved (off)');
+  } catch (err) { showToast(err.message, true); }
+});
+$('#schedStartNow').addEventListener('click', async () => {
+  try {
+    const s = await api('/api/schedule/start', {});
+    renderSchedule(s);
+    showToast(s.running ? 'Scheduled downloads started' : 'Nothing is waiting in the scheduler. Add links with ⏰ Later.');
+  } catch (err) { showToast(err.message, true); }
+});
+$('#schedStop').addEventListener('click', async () => {
+  try { renderSchedule(await api('/api/schedule/stop', {})); showToast('Stopped. Unfinished items wait for the next start.'); } catch (err) { showToast(err.message, true); }
+});
+$('#actionCancel').addEventListener('click', async () => {
+  try { renderSchedule(await api('/api/schedule/cancel-action', {})); showToast('Cancelled. The computer stays on.'); } catch (err) { showToast(err.message, true); }
+});
+$('#laterBtn').addEventListener('click', async () => {
+  const s = spec();
+  if (!s.url) { $('#url').focus(); return; }
+  try {
+    await api('/api/jobs', { ...s, scheduled: true });
+    $('#url').value = ''; $('#inspect').innerHTML = ''; chosenFormat = null; $('#fmtChosen').textContent = '';
+    showToast(sched && sched.enabled && sched.nextStart ? `Added to the scheduler · starts ${fmtWhen(sched.nextStart)}` : 'Added to the scheduler. Open ⏰ to turn it on and pick a time.');
+  } catch (err) { showToast(err.message, true); }
+});
+
+// ---------------------------------------------------------------- scheduler queue (Files in queue)
+function showTab(queue) {
+  $('#pageQueue').hidden = !queue;
+  $('#schedForm').hidden = queue;
+  $('#tabQueue').classList.toggle('on', queue);
+  $('#tabSched').classList.toggle('on', !queue);
+  $('#tabQueue').setAttribute('aria-selected', String(queue));
+  $('#tabSched').setAttribute('aria-selected', String(!queue));
+}
+$('#tabQueue').addEventListener('click', () => showTab(true));
+$('#tabSched').addEventListener('click', () => showTab(false));
+
+let qSelected = null;
+const Q_ACTIVE = ['queued', 'starting', 'downloading'];
+/** The scheduler's queue: what it is downloading now, then the waiting "Later" files in order. */
+function queueJobs() {
+  const all = [...jobs.values()];
+  const running = all.filter((j) => j.scheduleRun && Q_ACTIVE.includes(j.status));
+  const waiting = all.filter((j) => j.status === 'scheduled');
+  const ord = (a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt);
+  return [...running.sort(ord), ...waiting.sort(ord)];
+}
+
+function renderQueue() {
+  const body = $('#qBody');
+  if (!body || dragId) return; // don't rebuild the rows in the middle of a drag
+  const list = queueJobs();
+  if (qSelected && !list.some((j) => j.id === qSelected)) qSelected = null;
+  if (!list.length) {
+    body.innerHTML = '<tr><td colspan="5" class="q-empty">The queue is empty. Paste a link and press ⏰ Later to add it here.</td></tr>';
+  } else {
+    body.innerHTML = list.map((j, i) => {
+      const run = j.status !== 'scheduled';
+      const pct = percentOf(j);
+      const status = j.status === 'downloading' ? (pct != null ? `${pct}%` : 'Downloading') : j.status === 'starting' ? 'Starting…' : 'Waiting';
+      return `<tr data-id="${j.id}" class="${run ? 'running' : ''} ${j.id === qSelected ? 'sel' : ''}" ${run ? '' : 'draggable="true"'}>
+        <td>${i + 1}</td><td class="q-name" title="${esc(j.filename || j.url)}">${esc(j.filename || j.url)}</td>
+        <td>${j.size ? fmtBytes(j.size) : ''}</td><td>${status}</td><td>${j.status === 'downloading' && j.eta != null ? fmtEta(j.eta) : ''}</td></tr>`;
+    }).join('');
+  }
+  const sel = list.find((j) => j.id === qSelected);
+  const movable = sel && sel.status === 'scheduled';
+  const waiting = list.filter((j) => j.status === 'scheduled');
+  $('#qUp').disabled = !movable || waiting[0] === sel;
+  $('#qDown').disabled = !movable || waiting[waiting.length - 1] === sel;
+  $('#qDel').disabled = !sel;
+}
+
+async function qMove(id, to) {
+  try { await api(`/api/jobs/${id}/move`, { to }); } catch (err) { showToast(err.message, true); }
+}
+$('#qBody').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-id]');
+  if (!tr) return;
+  qSelected = tr.dataset.id;
+  renderQueue();
+});
+$('#qUp').addEventListener('click', () => qSelected && qMove(qSelected, 'up'));
+$('#qDown').addEventListener('click', () => qSelected && qMove(qSelected, 'down'));
+$('#qDel').addEventListener('click', async () => {
+  if (!qSelected) return;
+  try { await api(`/api/jobs/${qSelected}/pause`, {}); showToast('Removed from the queue (kept in the list as paused)'); } catch (err) { showToast(err.message, true); }
+});
+// Drag & drop re-ordering of waiting files
+let dragId = null;
+$('#qBody').addEventListener('dragstart', (e) => {
+  const tr = e.target.closest('tr[draggable="true"]');
+  if (!tr) return;
+  dragId = tr.dataset.id;
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', dragId); } catch { /* some browsers */ }
+});
+$('#qBody').addEventListener('dragover', (e) => {
+  const tr = e.target.closest('tr[draggable="true"]');
+  if (!dragId || !tr) return;
+  e.preventDefault();
+  $('#qBody').querySelectorAll('.drag-over').forEach((r) => r.classList.remove('drag-over'));
+  tr.classList.add('drag-over');
+});
+$('#qBody').addEventListener('drop', (e) => {
+  e.preventDefault();
+  const tr = e.target.closest('tr[draggable="true"]');
+  $('#qBody').querySelectorAll('.drag-over').forEach((r) => r.classList.remove('drag-over'));
+  if (!dragId || !tr || tr.dataset.id === dragId) { dragId = null; return; }
+  const waiting = queueJobs().filter((j) => j.status === 'scheduled').map((j) => j.id);
+  const to = waiting.indexOf(tr.dataset.id);
+  qSelected = dragId;
+  qMove(dragId, to);
+  dragId = null;
+});
+$('#qBody').addEventListener('dragend', () => { dragId = null; });
+// "Download N files at the same time" applies immediately (like IDM)
+$('#qConcurrent').addEventListener('change', async () => {
+  const n = Number($('#qConcurrent').value);
+  try { renderSchedule(await api('/api/schedule', { concurrent: n })); showToast(`Scheduler: ${n} file${n === 1 ? '' : 's'} at the same time`); }
+  catch (err) { showToast(err.message, true); $('#qConcurrent').value = sched ? sched.concurrent : 2; }
+});
+
+// ---------------------------------------------------------------- "New download" confirmation popup
+let cfJob = null;       // job shown in the popup
+let cfBusy = false;
+const KIND_LABEL = { direct: 'File', hls: 'Stream', ytdlp: 'Video site' };
+
+function confirmQueue() {
+  return [...jobs.values()].filter((j) => j.status === 'confirm').sort((a, b) => a.createdAt - b.createdAt);
+}
+
+// Mechano DM.exe shows its own floating "New download" window; then this page must not show one too.
+let hostCheck = { at: 0, native: false };
+async function nativeHost() {
+  if (window.chrome && window.chrome.webview) return true; // this page is inside Mechano DM.exe
+  if (Date.now() - hostCheck.at < 4000) return hostCheck.native;
+  try { hostCheck = { at: Date.now(), native: !!(await api('/api/host')).native }; } catch { hostCheck = { at: Date.now(), native: false }; }
+  return hostCheck.native;
+}
+
+let cfFolders = null, cfAutoFolder = '';
+async function checkConfirm() {
+  const dlg = $('#confirmDlg');
+  const q = confirmQueue();
+  if (q.length && !cfJob && await nativeHost()) return;
+  if (cfJob && !q.some((j) => j.id === cfJob.id)) { cfJob = null; if (dlg.open) dlg.close(); } // handled elsewhere
+  if (cfJob || !q.length) return;
+  cfJob = q[0];
+  const j = cfJob;
+  $('#cfCount').textContent = q.length > 1 ? `1 of ${q.length}` : '';
+  $('#cfName').textContent = j.filename || 'Getting details…';
+  $('#cfKind').textContent = j.playlist ? 'Playlist' : KIND_LABEL[j.kind] || j.kind;
+  $('#cfSize').textContent = '';
+  $('#cfUrl').textContent = j.url;
+  $('#cfUrl').title = j.url;
+  $('#cfFolder').value = '';
+  $('#cfFolder').placeholder = 'Working out the folder…';
+  $('#cfNote').hidden = true;
+  $('#cfDontAsk').checked = false;
+  setCfBusy(false);
+  if (!dlg.open) dlg.showModal();
+  $('#cfStart').focus();
+  try {
+    const d = await api(`/api/jobs/${j.id}/details`, {});
+    if (cfJob !== j) return;
+    $('#cfName').textContent = d.name;
+    $('#cfSize').textContent = d.size ? fmtBytes(d.size) : '';
+    if (!$('#cfFolder').value) $('#cfFolder').value = d.folder;
+    cfFolders = d.folders || null;
+    cfAutoFolder = d.folder;
+    const sel = $('#cfQuality');
+    sel.innerHTML = '';
+    for (const o of d.qualities || []) {
+      const opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label + (o.size ? `  (${fmtBytes(o.size)})` : '');
+      if (o.value === d.selected) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    $('#cfQualityRow').hidden = !(d.qualities && d.qualities.length);
+    if (d.note) { $('#cfNote').textContent = d.note; $('#cfNote').hidden = false; }
+  } catch (err) {
+    if (cfJob !== j) return;
+    $('#cfNote').textContent = err.message; $('#cfNote').hidden = false;
+  }
+}
+
+function setCfBusy(b) {
+  cfBusy = b;
+  for (const id of ['#cfStart', '#cfLater', '#cfCancel', '#cfBrowse']) $(id).disabled = b;
+}
+
+async function cfFinish(action) {
+  if (!cfJob || cfBusy) return;
+  const j = cfJob;
+  setCfBusy(true);
+  try {
+    if ($('#cfDontAsk').checked) await api('/api/config', { confirmDownloads: false });
+    if (action === 'cancel') await api(`/api/jobs/${j.id}/remove`, { deleteFiles: false });
+    else await api(`/api/jobs/${j.id}/confirm`, {
+      dir: $('#cfFolder').value.trim() || undefined, later: action === 'later',
+      quality: $('#cfQualityRow').hidden ? undefined : $('#cfQuality').value,
+    });
+    if ($('#cfDontAsk').checked) showToast('Downloads now start without asking. Turn it back on in ⚙ Settings.');
+    else if (action === 'later') showToast('Added to the scheduler (⏰)');
+    cfJob = null;
+    $('#confirmDlg').close();
+    setTimeout(checkConfirm, 50); // next one, if several arrived together
+  } catch (err) {
+    setCfBusy(false);
+    $('#cfNote').textContent = err.message; $('#cfNote').hidden = false;
+  }
+}
+
+// Audio goes to Music and video to Video, unless you typed your own folder.
+$('#cfQuality').addEventListener('change', () => {
+  if (!cfFolders) return;
+  const f = $('#cfFolder').value;
+  if (f !== cfFolders.video && f !== cfFolders.audio && f !== cfAutoFolder) return;
+  $('#cfFolder').value = cfAutoFolder = $('#cfQuality').value === 'audio' ? cfFolders.audio : cfFolders.video;
+});
+$('#cfStart').addEventListener('click', () => cfFinish('start'));
+$('#cfLater').addEventListener('click', () => cfFinish('later'));
+$('#cfCancel').addEventListener('click', () => cfFinish('cancel'));
+$('#confirmDlg').addEventListener('cancel', (e) => { e.preventDefault(); cfFinish('cancel'); }); // Esc = Cancel
+$('#cfFolder').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); cfFinish('start'); } });
+$('#cfBrowse').addEventListener('click', async () => {
+  setCfBusy(true);
+  try {
+    const r = await api('/api/pick-folder', { start: $('#cfFolder').value.trim() });
+    if (r.path) $('#cfFolder').value = r.path;
+  } catch (err) { showToast(err.message, true); }
+  setCfBusy(false);
+  $('#cfFolder').focus();
+});
+
+// Download method (Settings): remembered; a note in the link area shows when it is not Auto.
+function applyKind(v) {
+  const sel = $('#kind');
+  if (![...sel.options].some((o) => o.value === v)) v = 'auto';
+  sel.value = v;
+  const label = sel.options[sel.selectedIndex].text;
+  $('#kindNote').textContent = v === 'auto' ? '' : `Method: ${label} (change in ⚙ Settings)`;
+}
+$('#kind').addEventListener('change', () => {
+  store.set('mdm.kind', $('#kind').value);
+  applyKind($('#kind').value);
+  showToast($('#kind').value === 'auto' ? 'Download method: Auto' : `Download method changed: ${$('#kind').options[$('#kind').selectedIndex].text}`);
+});
+applyKind(store.get('mdm.kind') || 'auto');
+
+// A youtube.com/playlist link is always a playlist; a watch?v=…&list=… link offers the choice.
+$('#url').addEventListener('input', () => {
+  const v = $('#url').value;
+  if (/youtube\.com\/playlist\?/.test(v)) $('#playlist').checked = true;
+  $('#playlist').parentElement.style.fontWeight = /[?&]list=/.test(v) ? '600' : '';
+});
+
+$('#addForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try { await api('/api/jobs', spec()); $('#url').value = ''; $('#inspect').innerHTML = ''; chosenFormat = null; $('#fmtChosen').textContent = ''; }
+  catch (err) { alert(err.message); }
+});
+
+$('#inspectBtn').addEventListener('click', async () => {
+  const s = spec();
+  if (!s.url) return;
+  const box = $('#inspect');
+  box.innerHTML = '<p class="muted">Inspecting…</p>';
+  try {
+    const i = await api('/api/info', { url: s.url, kind: s.kind, playlist: !!s.playlist });
+    if (i.playlist) {
+      const items = (i.entries || []).slice(0, 50).map((e) => `<li>${esc(e.title || e.id)}${e.duration ? ` <span class="muted">(${fmtEta(Math.round(e.duration))})</span>` : ''}</li>`).join('');
+      box.innerHTML = `<p><b>${esc(i.title)}</b> <span class="badge">playlist</span> <span class="muted">${i.count} videos${i.duration ? ' · ' + fmtEta(Math.round(i.duration)) : ''}${i.uploader ? ' · ' + esc(i.uploader) : ''}</span></p>
+        <ol class="pl-list">${items}${i.count > 50 ? '<li>…</li>' : ''}</ol>
+        <p class="muted" style="font-size:12px">Press <b>Download</b> to save all ${i.count} videos into a folder named after the playlist. "Max quality" and "Audio only" apply to every video.</p>`;
+      $('#playlist').checked = true;
+      return;
+    }
+    if (i.formats) {
+      const rows = i.formats.slice().reverse().map((f) => {
+        const v = f.vcodec && f.vcodec !== 'none' ? `${f.height || '?'}p${f.fps ? ' ' + f.fps + 'fps' : ''}` : 'audio';
+        const a = f.acodec && f.acodec !== 'none' ? 'yes' : 'no';
+        return `<tr data-id="${esc(f.id)}"><td>${esc(f.id)}</td><td>${esc(f.ext)}</td><td>${esc(v)}</td><td>${esc((f.vcodec||'').split('.')[0])}</td><td>${a}</td><td>${fmtBytes(f.size)}</td><td>${esc(f.note)}</td></tr>`;
+      }).join('');
+      box.innerHTML = `<p><b>${esc(i.title)}</b> <span class="badge">${esc(i.extractor)}</span> <span class="muted">${i.duration ? fmtEta(Math.round(i.duration)) : ''}</span></p>
+        <p class="muted" style="font-size:12px">Click a row to pick an exact format (video-only rows are merged with the best audio automatically). Otherwise the best quality is chosen.</p>
+        <table class="formats"><tr><th>ID</th><th>Ext</th><th>Video</th><th>Codec</th><th>Audio</th><th>Size</th><th>Note</th></tr>${rows}</table>`;
+      box.querySelectorAll('tr[data-id]').forEach((tr) => tr.addEventListener('click', () => {
+        const f = i.formats.find((x) => x.id === tr.dataset.id);
+        chosenFormat = f.acodec === 'none' ? `${f.id}+ba/${f.id}` : f.id;
+        $('#fmtChosen').textContent = `Format: ${chosenFormat}`;
+      }));
+    } else {
+      box.innerHTML = `<p><b>${esc(i.filename)}</b> — ${fmtBytes(i.size)} · ${esc(i.contentType || 'unknown type')} · ${i.resumable ? '<span class="st-done">resumable, multi-connection</span>' : '<span class="st-paused">single connection, not resumable</span>'} · mode: ${esc(i.kind)}</p>`;
+    }
+  } catch (err) { box.innerHTML = `<p class="st-error">${esc(err.message)}</p>`; }
+});
+
+// Overall progress 0..1 (null = size unknown). Playlists: finished videos + part of the current one.
+function fractionOf(j) {
+  if (j.status === 'done') return 1;
+  if (j.playlist && Array.isArray(j.entries) && j.entries.length) {
+    // finished videos + the part of the one downloading now, out of the videos you kept
+    const kept = j.entries.filter((e) => e.state !== 'skipped');
+    if (!kept.length) return 0;
+    const finished = kept.filter((e) => e.state === 'done' || e.state === 'error').length;
+    const now = kept.find((e) => e.state === 'downloading');
+    const cur = now && now.size ? Math.min(1, (now.downloaded || 0) / now.size) : 0;
+    return Math.min(1, (finished + cur) / kept.length);
+  }
+  if (j.playlist && j.playlistCount) {
+    const cur = j.size ? Math.min(1, j.downloaded / j.size) : 0;
+    return Math.min(1, ((j.playlistIndex || 1) - 1 + cur) / j.playlistCount);
+  }
+  return j.size ? Math.min(1, j.downloaded / j.size) : null;
+}
+
+// Whole percent 0..100, never shows 100 before the job is really finished.
+function percentOf(j) {
+  const f = fractionOf(j);
+  if (f == null) return null;
+  if (j.status === 'done') return 100;
+  return Math.min(99, Math.floor(f * 100));
+}
+
+const GREEN = '#22a447';      // downloaded part
+const GREEN_EDGE = '#178a37'; // separators between connections / videos
+
+function drawBar(canvas, j) {
+  const w = canvas.clientWidth || 300, h = canvas.clientHeight || 18;
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h); // transparent: the white track shows through
+  const size = j.size;
+  ctx.fillStyle = GREEN;
+  if (j.status === 'done') { ctx.fillRect(0, 0, w, h); return; }
+  if (j.playlist && (j.playlistCount || (j.entries && j.entries.length))) {
+    ctx.fillRect(0, 0, (fractionOf(j) || 0) * w, h);
+    const n = j.entries ? j.entries.filter((e) => e.state !== 'skipped').length : j.playlistCount;
+    ctx.fillStyle = '#c9d1dc';
+    if (n <= 100) for (let k = 1; k < n; k++) ctx.fillRect(Math.round((k / n) * w), 0, 1, h);
+    return;
+  }
+  if (size && Array.isArray(j.segments) && j.segments.length) {
+    // IDM-style: every connection fills its own part of the file in green, all at the same time
+    for (const [start, pos] of j.segments) ctx.fillRect((start / size) * w, 0, Math.max(1, ((pos - start) / size) * w), h);
+    ctx.fillStyle = GREEN_EDGE;
+    for (const [start] of j.segments) if (start > 0) ctx.fillRect(Math.round((start / size) * w), 0, 1, h);
+  } else if (size) {
+    ctx.fillRect(0, 0, Math.min(1, j.downloaded / size) * w, h);
+  }
+}
+
+/** Playlist video list (only built while it is open). */
+function playlistHtml(j) {
+  const list = j.entries || [];
+  if (!list.length) return `<div class="pl-panel"><div class="pl-head">The video list appears as soon as the playlist has been read.</div></div>`;
+  const kept = list.filter((e) => e.state !== 'skipped').length;
+  const done = list.filter((e) => e.state === 'done').length;
+  const now = list.find((e) => e.state === 'downloading');
+  const waiting = list.filter((e) => e.state === 'waiting');
+  const rows = list.map((e) => {
+    const pct = e.size ? Math.min(99, Math.floor(((e.downloaded || 0) / e.size) * 100)) : null;
+    const st = e.state === 'downloading' ? `<span class="s-now">Downloading${pct != null ? ' ' + pct + '%' : '…'}</span>`
+      : e.state === 'done' ? '<span class="s-done">Done</span>'
+      : e.state === 'error' ? `<span class="s-error" title="${esc(e.error || '')}">Failed</span>`
+      : e.state === 'skipped' ? 'Skipped' : 'Waiting';
+    const canMove = e.state === 'waiting';
+    const first = waiting[0] === e, last = waiting[waiting.length - 1] === e;
+    return `<tr class="${e.state === 'downloading' ? 'now' : ''} ${e.state === 'skipped' ? 'skipped' : ''}">
+      <td class="n">${String(e.idx).padStart(2, '0')}</td>
+      <td><input type="checkbox" data-entry="${esc(e.id)}" ${e.state !== 'skipped' ? 'checked' : ''} ${e.state === 'done' ? 'disabled' : ''} title="${e.state === 'skipped' ? 'Download this video' : 'Skip this video'}"></td>
+      <td class="t" title="${esc(e.title)}">${esc(e.title)}</td><td>${st}</td>
+      <td class="mv">${canMove ? `<button type="button" data-eact="up" data-entry="${esc(e.id)}" ${first ? 'disabled' : ''} title="Move up">↑</button><button type="button" data-eact="down" data-entry="${esc(e.id)}" ${last ? 'disabled' : ''} title="Move down">↓</button>` : e.state === 'error' ? `<button type="button" data-eact="retry" data-entry="${esc(e.id)}" title="Try again" style="width:auto;padding:0 6px">Retry</button>` : ''}</td></tr>`;
+  }).join('');
+  return `<div class="pl-panel">
+    <div class="pl-head"><span>${now ? `Now: <b>${esc(now.title)}</b>` : `${done} of ${kept} videos downloaded`}</span><span>${kept} of ${list.length} selected · untick a video to skip it · ↑ ↓ change the order</span></div>
+    <div class="pl-scroll"><table class="pl-table"><thead><tr><th>#</th><th></th><th>Video</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
+function jobHtml(j, opts = {}) {
+  const pct = '';
+  let status = j.status === 'queued' && j.startAt ? `scheduled ${new Date(j.startAt).toLocaleString()}` : j.status;
+  if (j.status === 'confirm') status = 'waiting for your OK';
+  if (j.status === 'scheduled') status = `waiting for the scheduler${sched && sched.enabled && sched.nextStart ? ' · starts ' + fmtWhen(sched.nextStart) : sched && !sched.enabled ? ' (scheduler is off)' : ''}`;
+  if (j.playlist) {
+    if (j.status === 'done') status = `done · ${j.playlistDone || 0} videos${j.playlistSkipped ? ` (${j.playlistSkipped} skipped)` : ''}`;
+    else if (j.playlistIndex) status = `${j.status} · video ${j.playlistIndex} of ${j.playlistCount || '?'}`;
+  }
+  const live = j.status === 'downloading' ? `${fmtBytes(j.speed)}/s · ETA ${fmtEta(j.eta)} · ${j.connections || 0} conn` : '';
+  const btns = [];
+  if (['downloading', 'starting', 'queued'].includes(j.status)) btns.push(`<button class="small" data-act="pause">Pause</button>`);
+  if (['paused', 'error'].includes(j.status)) btns.push(`<button class="small" data-act="resume">${j.status === 'error' ? 'Retry' : 'Resume'}</button>`);
+  if (j.status === 'scheduled') btns.push(`<button class="small" data-act="resume" title="Download now instead of waiting">Start now</button>`);
+  if (['queued', 'paused', 'error'].includes(j.status)) btns.push(`<button class="small" data-act="later" title="Move to the scheduler">⏰ Later</button>`);
+  if (j.file || j.target) btns.push(`<button class="small" data-act="reveal">Folder</button>`);
+  if (j.playlist) btns.unshift(`<button class="small" data-act="videos" title="Show the videos of this playlist">Videos${j.entries ? ' (' + j.entries.length + ')' : ''} ${opts.videos ? '▴' : '▾'}</button>`);
+  btns.push(`<button class="small" data-act="log">Log</button>`, `<button class="small" data-act="remove">✕</button>`);
+  if (j.playlist && Array.isArray(j.entries) && j.entries.length) {
+    const kept = j.entries.filter((e) => e.state !== 'skipped');
+    const fin = kept.filter((e) => e.state === 'done' || e.state === 'error').length;
+    if (j.status === 'done') status = `done · ${j.entries.filter((e) => e.state === 'done').length} videos${j.entries.some((e) => e.state === 'error') ? ' (some failed)' : ''}`;
+    else status = `${j.status} · video ${Math.min(kept.length, fin + (j.status === 'downloading' ? 1 : 0)) || 0} of ${kept.length}`;
+  }
+  return `<div><div class="name" title="${esc(j.filename || j.url)}">${esc(j.filename || j.url)}</div>
+    <div class="meta"><span class="badge">${j.playlist ? 'playlist' : esc(j.kind)}</span><span class="st-${esc(j.status)}">${esc(status)}</span>
+    <span>${fmtBytes(j.downloaded)} / ${fmtBytes(j.size)} ${pct}</span><span>${live}</span></div></div>
+    <div class="actions">${btns.join('')}</div>
+    <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" ${percentOf(j) != null ? `aria-valuenow="${percentOf(j)}"` : ''}><canvas></canvas><span class="pct">${percentOf(j) != null ? percentOf(j) + '%' : (j.status === 'downloading' ? '…' : '')}</span></div>
+    ${j.error ? `<div class="err">${esc(j.error)}</div>` : ''}
+    <div class="log">${esc((j.log || []).join('\n'))}\n${esc(j.url)}</div>
+    ${j.playlist && opts.videos ? playlistHtml(j) : ''}`;
+}
+
+const visible = (j) => filter === 'all' || (filter === 'active' ? ['downloading','starting','queued'].includes(j.status) : j.status === filter);
+
+// Collapsed list: only the first LIST_LIMIT rows; running downloads always come first.
+const LIST_LIMIT = 4;
+let listCollapsed = true;
+const rank = (s) => (s === 'confirm' ? -1 : s === 'downloading' || s === 'starting' ? 0 : s === 'queued' ? 1 : s === 'paused' || s === 'error' || s === 'scheduled' ? 2 : 3);
+
+function setListCollapsed(c) {
+  listCollapsed = c;
+  const t = $('#listToggle');
+  t.classList.toggle('collapsed', c);
+  t.title = c ? 'Show all downloads' : `Show only ${LIST_LIMIT}`;
+  t.setAttribute('aria-expanded', String(!c));
+  store.set('mdm.listCollapsed', c ? '1' : '0');
+  render();
+}
+
+function render() {
+  const box = $('#jobs');
+  const list = [...jobs.values()].filter(visible)
+    .sort((a, b) => rank(a.status) - rank(b.status) || b.createdAt - a.createdAt);
+  const shown = listCollapsed ? list.slice(0, LIST_LIMIT) : list;
+  const seen = new Set();
+  for (const j of shown) {
+    seen.add(j.id);
+    let el = box.querySelector(`[data-job="${j.id}"]`);
+    if (!el) { el = document.createElement('div'); el.className = 'job'; el.dataset.job = j.id; }
+    const showLog = el.classList.contains('showlog');
+    const showVideos = el.classList.contains('showvideos');
+    const sc = el.querySelector('.pl-scroll');
+    const scrollTop = sc ? sc.scrollTop : 0; // keep your place in a long video list
+    el.innerHTML = jobHtml(j, { videos: showVideos });
+    el.classList.toggle('showlog', showLog);
+    el.classList.toggle('showvideos', showVideos);
+    if (showVideos) { const s2 = el.querySelector('.pl-scroll'); if (s2) s2.scrollTop = scrollTop; }
+    box.appendChild(el); // keeps sort order
+    drawBar(el.querySelector('canvas'), j);
+  }
+  box.querySelectorAll('[data-job]').forEach((el) => { if (!seen.has(el.dataset.job)) el.remove(); });
+  // "Show N more" / "Show less" under the list
+  let more = box.querySelector('.more-row');
+  const hiddenCount = list.length - shown.length;
+  if (hiddenCount > 0 || (!listCollapsed && list.length > LIST_LIMIT)) {
+    if (!more) {
+      more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'more-row';
+      more.addEventListener('click', () => setListCollapsed(!listCollapsed));
+    }
+    more.textContent = hiddenCount > 0 ? `Show ${hiddenCount} more ▾` : 'Show less ▴';
+    box.appendChild(more); // always last
+  } else if (more) {
+    more.remove();
+  }
+  if (!list.length) box.innerHTML = '<div class="empty">No downloads here yet.</div>';
+  else box.querySelector('.empty')?.remove();
+
+  renderQueue(); // the scheduler's "Files in queue" table
+  checkConfirm(); // "New download" popup for links waiting for approval
+  const all = [...jobs.values()];
+  const speed = all.reduce((s, j) => s + (j.status === 'downloading' ? j.speed || 0 : 0), 0);
+  $('#totals').textContent = `${all.filter((j) => j.status === 'downloading').length} active · ${fmtBytes(speed)}/s`;
+  const counts = { all: all.length, active: all.filter((j) => ['downloading','starting','queued'].includes(j.status)).length,
+    scheduled: all.filter((j) => j.status === 'scheduled').length,
+    paused: all.filter((j) => j.status === 'paused').length, done: all.filter((j) => j.status === 'done').length, error: all.filter((j) => j.status === 'error').length };
+  $('#filters').innerHTML = Object.entries(counts).map(([k, n]) => `<button class="small ${filter === k ? 'on' : ''}" data-f="${k}">${k[0].toUpperCase() + k.slice(1)} (${n})</button>`).join('');
+}
+
+let raf = 0;
+const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); }); };
+
+$('#filters').addEventListener('click', (e) => { const f = e.target.dataset.f; if (f) { filter = f; render(); } });
+$('#jobs').addEventListener('click', async (e) => {
+  // playlist video list: skip / include (checkbox), up / down / retry
+  const entry = e.target.dataset.entry;
+  if (entry) {
+    const jobEl = e.target.closest('[data-job]');
+    const action = e.target.type === 'checkbox' ? (e.target.checked ? 'include' : 'skip') : e.target.dataset.eact;
+    if (!action) return;
+    try { await api(`/api/jobs/${jobEl.dataset.job}/entry`, { entry, action }); } catch (err) { showToast(err.message, true); }
+    return;
+  }
+  const act = e.target.dataset.act; if (!act) return;
+  const el = e.target.closest('[data-job]'); const id = el.dataset.job;
+  try {
+    if (act === 'log') { el.classList.toggle('showlog'); return; }
+    if (act === 'videos') { el.classList.toggle('showvideos'); render(); return; }
+    if (act === 'remove') {
+      const j = jobs.get(id);
+      const del = j.status !== 'done' ? confirm('Also delete the unfinished partial file?') : false;
+      await api(`/api/jobs/${id}/remove`, { deleteFiles: del });
+      return;
+    }
+    await api(`/api/jobs/${id}/${act}`, {});
+  } catch (err) { alert(err.message); }
+});
+$('#pauseAll').addEventListener('click', () => jobs.forEach((j) => ['downloading','starting','queued'].includes(j.status) && api(`/api/jobs/${j.id}/pause`, {})));
+$('#resumeAll').addEventListener('click', () => jobs.forEach((j) => j.status === 'paused' && api(`/api/jobs/${j.id}/resume`, {})));
+$('#clearDone').addEventListener('click', () => jobs.forEach((j) => j.status === 'done' && api(`/api/jobs/${j.id}/remove`, { deleteFiles: false })));
+
+async function loadConfig() {
+  const c = await api('/api/config');
+  const f = $('#cfgForm');
+  for (const el of f.elements) if (el.name) el.type === 'checkbox' ? (el.checked = !!c[el.name]) : (el.value = c[el.name] ?? '');
+  $('#conns').value = c.connections;
+  const t = c.tools;
+  $('#tools').innerHTML = `<span>yt-dlp: ${t.ytdlp ? `<b class="ok">found</b>` : '<b class="no">not found</b> (YouTube & social sites need it)'}</span>
+    <span>ffmpeg: ${t.ffmpeg ? `<b class="ok">found</b>` : '<b class="no">not found</b> (needed to merge HD video + audio)'}</span>
+    <span>JS runtime for YouTube: <b class="ok">Node.js</b></span>`;
+  $('#tok').textContent = TOKEN;
+}
+$('#cfgForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target, body = {};
+  for (const el of f.elements) if (el.name) body[el.name] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
+  try { await api('/api/config', body); await loadConfig(); renderUpdate(await api('/api/update')); showToast('Settings saved'); } catch (err) { alert(err.message); }
+});
+
+// ---------------------------------------------------------------- yt-dlp updates (⟳ button)
+const ago = (t) => { const d = Math.floor((Date.now() - t) / 86400000); return d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`; };
+const inDays = (t) => { const d = Math.ceil((t - Date.now()) / 86400000); return d <= 0 ? 'soon' : d === 1 ? 'tomorrow' : `in ${d} days`; };
+let lastResultAt = null;
+function showToast(msg, bad) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.toggle('bad', !!bad);
+  t.style.display = 'block';
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => (t.style.display = 'none'), 7000);
+}
+function renderUpdate(s) {
+  const btn = $('#updBtn');
+  btn.classList.toggle('running', !!s.running);
+  btn.disabled = !!s.running;
+  let line2;
+  if (s.running) line2 = 'Updating…';
+  else if (s.pending) line2 = 'Update waits for current downloads';
+  else if (s.lastCheck) line2 = `Updated ${ago(s.lastCheck)}${s.intervalDays > 0 && s.nextAuto ? ' · next ' + inDays(s.nextAuto) : ''}`;
+  else line2 = s.intervalDays > 0 ? 'Auto-update on' : 'Auto-update off';
+  $('#updInfo').innerHTML = `yt-dlp <b>${esc(s.version || 'not found')}</b><br>${esc(line2)}`;
+  const r = s.lastResult;
+  if (r && r.at !== lastResultAt) {
+    if (lastResultAt !== null || Date.now() - r.at < 15000) showToast(r.message, !r.ok);
+    lastResultAt = r.at;
+  }
+}
+$('#updBtn').addEventListener('click', async () => {
+  try {
+    const s = await api('/api/update', {});
+    renderUpdate(s);
+    if (s.pending) showToast('A YouTube/social download is running. yt-dlp will update as soon as it finishes.');
+  } catch (err) { showToast(err.message, true); }
+});
+
+function connect() {
+  const es = new EventSource(`/api/events?token=${TOKEN}`);
+  es.addEventListener('update', (e) => renderUpdate(JSON.parse(e.data)));
+  es.addEventListener('schedule', (e) => renderSchedule(JSON.parse(e.data)));
+  es.addEventListener('snapshot', (e) => { jobs.clear(); for (const j of JSON.parse(e.data)) jobs.set(j.id, j); render(); });
+  es.addEventListener('job', (e) => { const j = JSON.parse(e.data); jobs.set(j.id, j); schedule(); });
+  es.addEventListener('removed', (e) => { jobs.delete(JSON.parse(e.data).id); schedule(); });
+}
+loadConfig().catch(() => {});
+setListCollapsed(store.get('mdm.listCollapsed') !== '0'); // collapsed (4 rows) unless the user opened it
+connect();
+window.addEventListener('resize', schedule);
+</script>
+</body>
+</html>

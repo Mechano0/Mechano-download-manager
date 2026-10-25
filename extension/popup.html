@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#fff; --text:#1d2330; --muted:#6b7385; --line:#e2e5eb; --accent:#1f6feb; --ok:#1a7f37; --err:#c62828; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#171b23; --text:#e6e9ef; --muted:#8b93a5; --line:#262c38; --accent:#4c8dff; --ok:#3fb950; --err:#f85149; } }
+  body { width: 360px; margin: 0; padding: 12px; font: 13px/1.4 "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  h1 { font-size: 14px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center; }
+  .dot { font-size: 12px; font-weight: 400; }
+  .ok { color: var(--ok); } .err { color: var(--err); } .muted { color: var(--muted); }
+  button { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); width: 100%; margin: 6px 0; }
+  ul { list-style: none; padding: 0; margin: 6px 0; max-height: 260px; overflow: auto; }
+  li { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 6px 0; border-top: 1px solid var(--line); align-items: center; }
+  .u { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  .k { font-size: 10px; text-transform: uppercase; color: var(--muted); }
+  details { margin-top: 8px; } summary { cursor: pointer; color: var(--muted); }
+  label { display: block; margin: 6px 0; font-size: 12px; }
+  input[type=text], input[type=number] { width: 100%; box-sizing: border-box; padding: 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--text); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+  <h1>Mechano DM <span class="dot" id="status">…</span></h1>
+  <div id="page"></div>
+  <div class="muted" id="hint"></div>
+  <ul id="media"></ul>
+  <details>
+    <summary>Settings</summary>
+    <label><input type="checkbox" id="intercept"> Take over browser downloads</label>
+    <label>File types to take over <input type="text" id="exts"></label>
+    <label>App port <input type="number" id="port"></label>
+    <button id="save">Save</button>
+    <a id="open" href="#" style="margin-left:8px">Open app</a>
+  </details>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+# Personal data: settings, private token, history, cookies, logs. Never upload.
+data/
+
+# Build output (the Setup and the portable zip go to GitHub Releases instead)
+dist/
+/Mechano DM.exe
+
+# Downloaded tools (bundled into the Setup by build-portable.ps1)
+bin/*.exe
+runtime/
+
+# Unfinished downloads
+*.mdmpart
+*.mdmpart.json
+*.mdmhls/
+
+node_modules/
+
+# Private research notes
+docs/IDM-ANALYSIS.md
