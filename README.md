@@ -36,7 +36,7 @@ To remove it: **Settings → Apps → Mechano Download Manager → Uninstall**. 
 - **"Download complete"** popup with *Open* / *Open folder*.
 - **Scheduler and queue** like IDM: start time, days of the week, "N files at the same time", re-ordering. After it finishes the app can sleep, hibernate, restart or shut down the PC.
 - **HLS streams** (`.m3u8`) with AES-128, plus a speed limit and category folders (`Downloads\M.DM\Video`, `Music`, …).
-- **yt-dlp updates itself** every 5 days, or press ⟳.
+- **yt-dlp updates itself** every 5 days, or press ⟳ (official release, checked against its SHA-256).
 - **Light / dark themes**, tray icon, start with Windows, and its own taskbar icon.
 - **Browser extension** (Chrome / Edge, and Firefox): a Download button on videos, download takeover, and right-click "Download with Mechano DM".
 
@@ -53,7 +53,7 @@ desktop\build-exe.cmd
 ```
 
 `build-exe.cmd` builds `Mechano DM.exe` (the Windows window) with the C# compiler that comes with Windows.
-Put `yt-dlp.exe`, `ffmpeg.exe` and `aria2c.exe` in `bin\` (or install yt-dlp and ffmpeg with `winget install yt-dlp.yt-dlp`), then run `Mechano DM.exe`.
+Unzip yt-dlp's official `yt-dlp_win.zip` into `bin\yt-dlp\` (it starts much faster than the one-file `yt-dlp.exe`), put `ffmpeg.exe` and `aria2c.exe` in `bin\`, then run `Mechano DM.exe`.
 The small LGPL ffmpeg the Setup ships is built by `.github/workflows/ffmpeg.yml` (`tools/ffmpeg/build.sh`); put its output in `tools\ffmpeg\out\`.
 
 Firefox extension: `node tools/build-firefox.js` → `dist\mechano-dm-firefox.xpi` (Firefox needs it signed by addons.mozilla.org; for testing load `dist\firefox\manifest.json` in `about:debugging`).

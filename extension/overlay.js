@@ -114,6 +114,23 @@
     miniTimer = setTimeout(() => { if (!panelOpen && !hovering) setMini(true); }, ms);
   };
   pill.addEventListener('mouseenter', () => { hovering = true; clearTimeout(miniTimer); setMini(false); });
+
+  // Qualities are read in the background once you stay on a video for 2 s (or point at the button),
+  // so the list is usually ready when you click. Scrolling past videos asks for nothing.
+  let prefetchTimer = 0;
+  const prefetched = new Set();
+  function prefetch(video) {
+    if (!video || !video.isConnected) return;
+    const t = resolveTarget(video);
+    if (!t.site || prefetched.has(t.url)) return;
+    prefetched.add(t.url);
+    ask({ type: 'video-options', url: t.url });
+  }
+  function prefetchSoon(video) {
+    clearTimeout(prefetchTimer);
+    prefetchTimer = setTimeout(() => { if (current === video && !isHidden(video)) prefetch(video); }, 2000);
+  }
+  pill.addEventListener('mouseenter', () => prefetch(current));
   pill.addEventListener('mouseleave', () => { hovering = false; shrinkSoon(1200); });
 
   const attach = () => {
@@ -158,7 +175,7 @@
     if (!current) { wrap.style.display = 'none'; closePanel(); lastKey = ''; return; }
     attach();
     const key = videoKey(current);
-    if (key !== lastKey) { lastKey = key; setMini(false); shrinkSoon(4000); }
+    if (key !== lastKey) { lastKey = key; setMini(false); shrinkSoon(4000); prefetchSoon(current); }
     const r = current.getBoundingClientRect();
     wrap.style.display = 'flex';
     const w = pill.offsetWidth || 130;
@@ -302,7 +319,7 @@
       return;
     }
     const info = r.data;
-    const rows = info.options.map((o) => option(o.label, fmtSize(o.size), () => sendJob({ url: t.url, kind: 'ytdlp', maxHeight: o.maxHeight })));
+    const rows = info.options.map((o) => option(o.label, fmtSize(o.size), () => sendJob({ url: t.url, kind: 'ytdlp', maxHeight: o.maxHeight, format: o.format })));
     if (!rows.length) rows.push(option('Best quality', '', () => sendJob({ url: t.url, kind: 'ytdlp' })));
     if (info.audio) rows.push(el('div', 'sep'), option('Audio only (MP3)', fmtSize(info.audio.size), () => sendJob({ url: t.url, kind: 'ytdlp', audioOnly: true })));
     let plBox = null;

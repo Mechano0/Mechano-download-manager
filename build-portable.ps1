@@ -32,8 +32,16 @@ Copy-Item $node (Join-Path $out 'runtime\node.exe')
 $nodeLic = Join-Path (Split-Path $node) 'LICENSE'
 if (Test-Path $nodeLic) { Copy-Item $nodeLic (Join-Path $lic 'Node.js-LICENSE.txt') }
 
-$ytdlp = (Get-Command yt-dlp).Source
-Copy-Item $ytdlp (Join-Path $out 'bin\yt-dlp.exe')
+# yt-dlp: the official folder build (yt-dlp_win.zip unpacked in bin\yt-dlp) starts in a few seconds;
+# the one-file yt-dlp.exe unpacks itself on every run (10+ s). Fall back to the one-file exe if needed.
+$ytdlpDir = Join-Path $root 'bin\yt-dlp'
+if (Test-Path (Join-Path $ytdlpDir 'yt-dlp.exe')) {
+  Copy-Item $ytdlpDir (Join-Path $out 'bin\yt-dlp') -Recurse
+} else {
+  Write-Warning 'bin\yt-dlp\ (yt-dlp_win.zip) not found: using the slower one-file yt-dlp.exe'
+  $ytdlp = (Get-Command yt-dlp).Source
+  Copy-Item $ytdlp (Join-Path $out 'bin\yt-dlp.exe')
+}
 Set-Content -Encoding utf8 (Join-Path $lic 'yt-dlp-LICENSE.txt') @'
 yt-dlp is released into the public domain under The Unlicense.
 Source code and full license: https://github.com/yt-dlp/yt-dlp

@@ -8,7 +8,9 @@ IDM-style download manager for Windows. Owner: Eslam (talks in Egyptian Arabic; 
   floating "New download" window (quality + save folder), "Download complete" popup. Log: `data/host.log`. Rebuild: `desktop\build-exe.cmd` (stop the app first).
 - Engine (Node, no npm deps): `src/server.js` (local API, token + Host checks, `data/server.log`), `src/manager.js` (queue, confirm step, categories,
   playlist entries API), `src/segmented.js` (multi-connection), `src/hls.js`, `src/ytdlp.js` (yt-dlp bridge, `--encoding utf-8`), `src/playlist.js`
-  (playlist video-by-video), `src/scheduler.js` + `src/power.js` (scheduler, after-finish action), `src/updater.js` (yt-dlp auto-update, 5 days).
+  (playlist video-by-video), `src/scheduler.js` + `src/power.js` (scheduler, after-finish action), `src/updater.js` (yt-dlp auto-update, 5 days;
+  folder build `bin\yt-dlp\` = official yt-dlp_win.zip, gitignored, updated by download + SHA2-256SUMS; one-file exe starts 10+ s slower).
+  Facebook sd/hd: `probeMp4` reads their size from the first 256 KB; quality values `360:sd` pick them by id. The extension prefetches qualities after 2 s on a video.
   New (v1.1): `src/media.js` (fast video: yt-dlp finds URLs, our engine downloads, ffmpeg joins; falls back to plain yt-dlp), `src/torrent.js`
   (aria2c `bin\aria2c.exe` over JSON-RPC, random port+secret), `src/grabber.js` (Site Grabber), `src/preview.js` (play while downloading),
   `src/selfupdate.js` (signed version.json from GitHub releases; Ed25519 public key inside; private key `%USERPROFILE%\.mechano-dm\update-signing-key.pem`,
@@ -20,12 +22,12 @@ IDM-style download manager for Windows. Owner: Eslam (talks in Egyptian Arabic; 
 - Data: `data/` (config.json has the private token — never share/copy). Downloads: `%USERPROFILE%\Downloads\M.DM\<Category>`.
 
 ## Commands
-- Tests: `node --test test/` (35 tests, all offline).
+- Tests: `node --test test/` (37 tests, all offline).
 - Release: bump `package.json` version → `build-setup.ps1 -Rebuild` → `node tools/sign-release.js --notes "..."` → upload `Mechano.DM.Setup.exe`,
   `Mechano.DM.zip`, `version.json` to a GitHub release `v<version>`. Small ffmpeg: artifact `ffmpeg-win64` of `.github/workflows/ffmpeg.yml` → `tools\ffmpeg\out\`.
 - Execution policy is Bypass for CurrentUser: run scripts as `powershell -File x.ps1` (no `-ExecutionPolicy` flag).
 - Portable build: `powershell -ExecutionPolicy Bypass -File build-portable.ps1` → `dist\Mechano DM.zip` (bundles node, yt-dlp, ffmpeg, lib).
-- Installer: `powershell -ExecutionPolicy Bypass -File build-setup.ps1 [-Rebuild]` → `dist\Mechano DM Setup.exe` (~90 MB, source `desktop/Setup.cs`,
+- Installer: `powershell -ExecutionPolicy Bypass -File build-setup.ps1 [-Rebuild]` → `dist\Mechano DM Setup.exe` (~55 MB, source `desktop/Setup.cs`,
   LZX cab via makecab + setupapi; per-user install to %LOCALAPPDATA%\Programs\Mechano DM, Uninstall.exe, `/silent /dir= /nolaunch /nodesktop` for tests).
 - Restart the app after engine/UI changes: stop process `Mechano DM`, start `Mechano DM.exe` (UI-only changes: F5 in the window).
 - Shortcuts: `desktop\install-shortcut.ps1`. Icons: `node assets/build-icon.js <ffmpeg>` from `assets/logo-source.png`.

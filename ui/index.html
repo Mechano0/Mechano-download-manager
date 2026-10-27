@@ -624,6 +624,10 @@
 <div class="support-pop" id="supportPop" role="dialog" aria-label="Support Mechano DM" hidden>
   <h3>Support Mechano DM</h3>
   <p>Mechano DM is free. If it helps you, you can support its development:</p>
+  <div class="pay" id="payPaypal" hidden>
+    <div class="pay-head"><span class="pay-dot" style="background:#0070e0"></span><span translate="no">PayPal</span></div>
+    <a class="button" id="paypalLink" href="#" target="_blank" rel="noopener">Send with PayPal</a>
+  </div>
   <div class="pay" id="payPayoneer" hidden>
     <div class="pay-head"><span class="pay-dot" style="background:#ff4800"></span><span translate="no">Payoneer</span></div>
     <a class="button" id="payoneerLink" href="#" target="_blank" rel="noopener">Send with Payoneer</a>
@@ -1393,7 +1397,8 @@ window.addEventListener('resize', schedule);
 // ---------------------------------------------------------------- Support (bottom-left)
 // Fill these in to show them; an empty one is hidden, and the Support button only shows when one is set.
 const SUPPORT = {
-  payoneer: '',       // Payoneer payment-request link, e.g. https://link.payoneer.com/Token?t=...
+  paypal: '',         // PayPal.Me link, e.g. https://paypal.me/name (next update, when the account is ready)
+  payoneer: '',       // Payoneer payment-request link, e.g. https://link.payoneer.com/Token?t=... (next update)
   instapay: 'islam.abdo10@instapay', // InstaPay address, e.g. name@instapay
   instapayLink: 'https://ipn.eg/S/islam.abdo10/instapay/6qIPKT', // optional InstaPay link, e.g. https://ipn.eg/S/name/instapay/...
 };
@@ -1402,12 +1407,15 @@ function setupSupport() {
   const hasPay = https(SUPPORT.payoneer), hasInsta = !!(SUPPORT.instapay || https(SUPPORT.instapayLink));
   $('#payPayoneer').hidden = !hasPay;
   if (hasPay) $('#payoneerLink').href = SUPPORT.payoneer;
+  const hasPaypal = https(SUPPORT.paypal);
+  $('#payPaypal').hidden = !hasPaypal;
+  if (hasPaypal) $('#paypalLink').href = SUPPORT.paypal;
   $('#payInstapay').hidden = !hasInsta;
   $('#instapayIdRow').hidden = !SUPPORT.instapay;
   $('#instapayId').textContent = SUPPORT.instapay;
   $('#instapayLink').hidden = !https(SUPPORT.instapayLink);
   if (https(SUPPORT.instapayLink)) $('#instapayLink').href = SUPPORT.instapayLink;
-  $('#supportBtn').hidden = !(hasPay || hasInsta);
+  $('#supportBtn').hidden = !(hasPay || hasInsta || hasPaypal);
   const toggle = (open) => { $('#supportPop').hidden = !open; $('#supportBtn').setAttribute('aria-expanded', String(open)); };
   $('#supportBtn').addEventListener('click', (e) => { e.stopPropagation(); toggle($('#supportPop').hidden); });
   document.addEventListener('click', (e) => { if (!$('#supportPop').hidden && !$('#supportPop').contains(e.target)) toggle(false); });

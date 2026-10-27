@@ -344,7 +344,10 @@ class Manager extends EventEmitter {
     if (quality != null && job.kind === 'ytdlp') {
       const q = String(quality);
       job.audioOnly = q === 'audio';
-      job.maxHeight = /^\d+$/.test(q) ? Number(q) : null;
+      // "360" = best up to 360p; "360:sd" = that exact file (Facebook's sd/hd have no height for yt-dlp)
+      const m = q.match(/^(\d+)(?::([\w.-]{1,40}))?$/);
+      job.maxHeight = m ? Number(m[1]) : null;
+      job.format = m && m[2] ? m[2] : null;
       if (!dir) job.dir = null; // category follows the choice (Music for audio, Video otherwise)
     }
     if (category && CATEGORY_NAMES.includes(category)) job.category = category;
@@ -706,12 +709,12 @@ function qualityOptions(formats = []) {
     const h264 = /avc|h264/i.test(f.vcodec || '');
     const muxed = !!(f.acodec && f.acodec !== 'none');
     const prev = byRes.get(p);
-    if (!prev || (h264 && !prev.h264) || (h264 === prev.h264 && (f.size || 0) > (prev.size || 0))) byRes.set(p, { p, fps: f.fps, size: f.size, h264, muxed });
+    if (!prev || (h264 && !prev.h264) || (h264 === prev.h264 && (f.size || 0) > (prev.size || 0))) byRes.set(p, { p, fps: f.fps, size: f.size, h264, muxed, id: f.id, probed: !!f.probed });
   }
   const out = [{ value: 'best', label: 'Best available' }];
   for (const o of [...byRes.values()].sort((a, b) => b.p - a.p).slice(0, 8)) {
     const tag = o.p >= 2160 ? '4K ' : o.p >= 1440 ? '2K ' : o.p >= 720 ? 'HD ' : '';
-    out.push({ value: String(o.p), label: `${tag}${o.p}p${o.fps > 30 ? ' ' + Math.round(o.fps) + 'fps' : ''}`, size: o.size ? o.size + (o.muxed || !audio ? 0 : audio.size || 0) : null });
+    out.push({ value: o.probed && /^[\w.-]{1,40}$/.test(o.id || '') ? `${o.p}:${o.id}` : String(o.p), label: `${tag}${o.p}p${o.fps > 30 ? ' ' + Math.round(o.fps) + 'fps' : ''}`, size: o.size ? o.size + (o.muxed || !audio ? 0 : audio.size || 0) : null });
   }
   out.push({ value: 'audio', label: 'Audio only (MP3)', size: audio ? audio.size || null : null });
   return out;

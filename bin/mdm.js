@@ -28,7 +28,7 @@ const { Scheduler } = require('../src/scheduler');
 const { SelfUpdater } = require('../src/selfupdate');
 const { SegmentedDownload } = require('../src/segmented');
 const { HlsDownload } = require('../src/hls');
-const { YtdlpDownload, info: ytInfo } = require('../src/ytdlp');
+const { YtdlpDownload, info: ytInfo, warmUp } = require('../src/ytdlp');
 const { RateLimiter } = require('../src/limiter');
 const { probe } = require('../src/probe');
 const { formatBytes } = require('../src/util');
@@ -114,6 +114,7 @@ async function cmdInfo(a) {
 function cmdServe(a) {
   const m = new Manager(DATA_DIR);
   if (a.port) m.config.port = a.port;
+  warmUp(m.tools().ytdlp); // yt-dlp's options, read in the background so the first video doesn't wait
   const updater = new Updater(m); // keeps yt-dlp current (every autoUpdateDays, default 5)
   const scheduler = new Scheduler(m); // "Later" downloads + after-finish action
   const selfUpdater = new SelfUpdater(m); // new versions of Mechano DM (signed; Settings -> App updates)

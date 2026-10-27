@@ -60,12 +60,13 @@ async function cookiesFor(url) {
 }
 
 /** Send a URL to the app. pageUrl is used for cookies of media sites (yt-dlp). */
-async function sendToApp(url, { referrer, pageUrl, kind, filename, mime, maxHeight, audioOnly, playlist } = {}) {
+async function sendToApp(url, { referrer, pageUrl, kind, filename, mime, maxHeight, audioOnly, playlist, format } = {}) {
   // For media sites, cookies of the video URL's own site (lets yt-dlp see private / logged-in videos).
   const cookies = await cookiesFor(url);
   return api('/api/jobs', {
     url, kind: kind || 'auto', referrer: referrer || pageUrl || null, filename, mime, cookies,
     userAgent: navigator.userAgent, maxHeight: maxHeight || null, audioOnly: !!audioOnly, playlist: !!playlist,
+    format: typeof format === 'string' && /^[\w.-]{1,40}$/.test(format) ? format : undefined,
   });
 }
 
@@ -81,9 +82,16 @@ async function playlistInfo(url) {
 
 // Quality list for the floating button: one row per resolution with an estimated size.
 const optionsCache = new Map();
-async function videoOptions(url) {
+const optionsInFlight = new Map(); // the button asks early (prefetch) and again on click: one yt-dlp run for both
+function videoOptions(url) {
   const hit = optionsCache.get(url);
-  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.data;
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return Promise.resolve(hit.data);
+  if (!optionsInFlight.has(url)) {
+    optionsInFlight.set(url, readVideoOptions(url).finally(() => optionsInFlight.delete(url)));
+  }
+  return optionsInFlight.get(url);
+}
+async function readVideoOptions(url) {
   const cookies = await cookiesFor(url);
   const info = await api('/api/info', { url, kind: 'ytdlp', cookies, userAgent: navigator.userAgent });
   const formats = info.formats || [];
@@ -101,13 +109,14 @@ async function videoOptions(url) {
     const prev = byRes.get(p);
     // Size shown = what will actually be downloaded: H.264 when available (the app's default), plus audio.
     if (!prev || (h264 && !prev.h264) || (h264 === prev.h264 && (f.size || 0) > (prev.size || 0))) {
-      byRes.set(p, { p, fps: f.fps, size: f.size, h264, muxed });
+      byRes.set(p, { p, fps: f.fps, size: f.size, h264, muxed, id: f.id, probed: !!f.probed });
     }
   }
   const options = [...byRes.values()].sort((a, b) => b.p - a.p).slice(0, 8).map((o) => {
     const label = `${o.p >= 2160 ? '4K · ' : o.p >= 1440 ? '2K · ' : o.p >= 720 ? 'HD · ' : ''}${o.p}p${o.fps > 30 ? ' ' + Math.round(o.fps) + 'fps' : ''}`;
     const size = o.size ? o.size + (o.muxed || !audio ? 0 : audio.size || 0) : null;
-    return { label, maxHeight: o.p, size };
+    // Facebook's sd/hd files have no height for yt-dlp, so "res:360" can't find them: ask for them by id.
+    return { label, maxHeight: o.p, size, format: o.probed && /^[\w.-]{1,40}$/.test(o.id) ? o.id : undefined };
   });
   const data = { title: info.title, site: info.extractor, options, audio: audio ? { size: audio.size } : null };
   optionsCache.set(url, { at: Date.now(), data });
@@ -237,7 +246,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     }
     if (msg.type === 'send') {
       const kind = msg.kind === 'dash' ? 'ytdlp' : msg.kind === 'file' ? 'direct' : msg.kind;
-      return sendToApp(msg.url, { kind, pageUrl: msg.pageUrl, referrer: msg.referrer || msg.pageUrl, maxHeight: msg.maxHeight, audioOnly: msg.audioOnly, playlist: msg.playlist });
+      return sendToApp(msg.url, { kind, pageUrl: msg.pageUrl, referrer: msg.referrer || msg.pageUrl, maxHeight: msg.maxHeight, audioOnly: msg.audioOnly, playlist: msg.playlist, format: msg.format });
     }
     if (msg.type === 'video-options') return videoOptions(msg.url);
     if (msg.type === 'playlist-info') return playlistInfo(msg.url);

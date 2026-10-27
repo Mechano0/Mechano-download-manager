@@ -96,3 +96,41 @@ test('playlist links are recognised', () => {
   assert.equal(m.add({ url: 'https://www.youtube.com/watch?v=abc&list=PL123', playlist: true }).playlist, true);
   m.shutdown();
 });
+
+test('the folder build (bin/yt-dlp/) is updated by download, not by yt-dlp -U', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mdm-upd-'));
+  const m = new Manager(dataDir);
+  clearInterval(m.scheduler);
+  m.tools = () => ({ ytdlp: 'C:/fake/yt-dlp/yt-dlp.exe', ffmpeg: null, node: process.execPath });
+  const calls = [];
+  const u = new Updater(m, {
+    firstCheckDelayMs: 1e9, checkEveryMs: 1e9, versionOf: () => '2026.08.19', isFolder: () => true,
+    exec: async (cmd) => { calls.push(cmd); return { code: 0, out: '' }; },
+    folderUpdate: async (exe, current) => { calls.push(`folder ${current}`); return { version: '2026.10.26', changed: true }; },
+  });
+  u.stop();
+  const s = await u.update('manual');
+  assert.deepEqual(calls, ['folder 2026.08.19']);
+  assert.equal(s.lastResult.ok, true);
+  assert.equal(s.lastResult.method, 'download');
+  assert.equal(s.version, '2026.10.26');
+  assert.equal(s.running, false);
+  m.shutdown();
+});
+
+test('probeMp4 reads width and height of a progressive MP4 (Facebook sd/hd)', async () => {
+  const http = require('node:http');
+  const { probeMp4 } = require('../src/ytdlp');
+  // minimal "moov": an audio track (0 x 0) then a 640 x 360 video track, each with a 92-byte tkhd
+  const tkhd = (w, h) => { const b = Buffer.alloc(92); b.writeUInt32BE(92, 0); b.write('tkhd', 4); b.writeUInt32BE(w * 65536, 84); b.writeUInt32BE(h * 65536, 88); return b; };
+  const body = Buffer.concat([Buffer.from('....ftypisom'), tkhd(0, 0), Buffer.from('mp4a'), tkhd(640, 360), Buffer.from('avc1'), Buffer.alloc(1000)]);
+  const server = http.createServer((req, res) => {
+    res.writeHead(206, { 'content-range': `bytes 0-${body.length - 1}/5000000`, 'content-length': body.length });
+    res.end(body);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const p = await probeMp4(`http://127.0.0.1:${server.address().port}/v.mp4`);
+    assert.deepEqual(p, { width: 640, height: 360, size: 5000000, vcodec: 'avc1', acodec: 'mp4a' });
+  } finally { server.close(); }
+});

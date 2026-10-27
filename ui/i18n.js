@@ -118,7 +118,7 @@
     'Find files': 'دوّر على الملفات', 'Download selected': 'حمّل المحدد', 'Looking for files…': 'بندوّر على الملفات…',
     'More extensions: .iso .dwg': 'امتدادات تانية: .iso .dwg', 'Close Site Grabber': 'اقفل جرّاب المواقع', 'Updating…': 'بيتحدّث…', 'Scheduler saved (off)': 'الجدولة اتحفظت (مقفولة)', 'Download method: Auto': 'طريقة التحميل: تلقائي',
     'Added to the scheduler. Open ⏰ to turn it on and pick a time.': 'اتضاف للجدولة. افتح ⏰ عشان تشغّلها وتختار ميعاد.',
-    'Copy': 'نسخ', 'Support': 'ادعمنا', 'Support Mechano DM': 'ادعم Mechano DM', 'Send with Payoneer': 'ابعت عن طريق Payoneer', 'Open InstaPay': 'افتح InstaPay',
+    'Copy': 'نسخ', 'Support': 'ادعمنا', 'Support Mechano DM': 'ادعم Mechano DM', 'Send with PayPal': 'ابعت عن طريق PayPal', 'Send with Payoneer': 'ابعت عن طريق Payoneer', 'Open InstaPay': 'افتح InstaPay',
     'Mechano DM is free. If it helps you, you can support its development:': 'Mechano DM مجاني. لو بيفيدك، تقدر تدعم تطويره:', 'InstaPay address copied.': 'عنوان InstaPay اتنسخ.',
   };
 

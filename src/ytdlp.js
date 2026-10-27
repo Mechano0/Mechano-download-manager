@@ -14,7 +14,7 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn, execFile, execFileSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 
 const toolCache = new Map();
@@ -26,8 +26,10 @@ function findTool(name, explicit) {
   if (toolCache.has(key)) return toolCache.get(key);
   let found = null;
   const exe = process.platform === 'win32' ? name + '.exe' : name;
-  const local = path.join(__dirname, '..', 'bin', exe);
-  if (fs.existsSync(local)) found = local;
+  // A folder build (bin\yt-dlp\yt-dlp.exe + _internal) starts in seconds; the one-file exe unpacks itself on every run.
+  for (const local of [path.join(__dirname, '..', 'bin', name, exe), path.join(__dirname, '..', 'bin', exe)]) {
+    if (!found && fs.existsSync(local)) found = local;
+  }
   if (!found) {
     try {
       const cmd = process.platform === 'win32' ? 'where' : 'which';
@@ -40,19 +42,42 @@ function findTool(name, explicit) {
 
 function resetToolCache() { toolCache.clear(); }
 
-/** "2026.08.19" etc., or null if the tool can't run. */
+/** "2026.08.19" etc., or null if the tool can't run. Async: yt-dlp takes seconds to start. */
 function toolVersion(exe) {
-  if (!exe) return null;
-  try { return execFileSync(exe, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 20000, stdio: ['ignore', 'pipe', 'ignore'] }).trim().split(/\r?\n/)[0] || null; } catch { return null; }
+  if (!exe) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    execFile(exe, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 30000 }, (err, out) => {
+      resolve(err ? null : String(out).trim().split(/\r?\n/)[0] || null);
+    });
+  });
 }
 
+/** True when this yt-dlp is the folder build (yt-dlp.exe next to an _internal folder). */
+function isFolderBuild(exe) { return !!exe && fs.existsSync(path.join(path.dirname(exe), '_internal')); }
+
 /** After yt-dlp is updated its options may change: re-detect them on next use. */
-function resetRuntimeCache() { jsRuntimeFlag = undefined; }
+function resetRuntimeCache() { jsRuntimeFlag = undefined; jsRuntimeWarm = null; }
 
 let jsRuntimeFlag;
+let jsRuntimeWarm = null;
+/** Find out in the background (at start) whether this yt-dlp has --js-runtimes, so no request waits for it. */
+function warmUp(ytdlp) {
+  if (!ytdlp || jsRuntimeFlag !== undefined) return Promise.resolve();
+  if (!jsRuntimeWarm) {
+    jsRuntimeWarm = new Promise((resolve) => {
+      execFile(ytdlp, ['--help'], { encoding: 'utf8', windowsHide: true, maxBuffer: 8 << 20, timeout: 60000 }, (err, out) => {
+        if (jsRuntimeFlag === undefined) jsRuntimeFlag = !err && String(out).includes('--js-runtimes');
+        resolve();
+      });
+    });
+  }
+  return jsRuntimeWarm;
+}
+
 /** Newer yt-dlp builds need --js-runtimes to use Node instead of the default Deno. */
 function jsRuntimeArgs(ytdlp) {
   if (jsRuntimeFlag === undefined) {
+    // only if a request comes before warmUp() finished
     try {
       const help = execFileSync(ytdlp, ['--help'], { encoding: 'utf8', windowsHide: true, maxBuffer: 8 << 20 });
       jsRuntimeFlag = help.includes('--js-runtimes');
@@ -125,9 +150,47 @@ function baseArgs(o) {
   return args.concat(jsRuntimeArgs(o.ytdlp));
 }
 
+/**
+ * Width, height, codecs and total size of a progressive MP4, read from its first 256 KB (Facebook puts
+ * the "moov" box at the start). Facebook's "sd" (360p) and "hd" (720p) H.264 files come from yt-dlp
+ * without a height, so without this they are missing from the quality list.
+ */
+async function probeMp4(url, headers = {}, timeoutMs = 6000) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { headers: { ...headers, range: 'bytes=0-262143' }, signal: ac.signal });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    const total = Number((res.headers.get('content-range') || '').split('/')[1]) || null;
+    let width = null, height = null;
+    for (let i = buf.indexOf('tkhd'); i >= 4; i = buf.indexOf('tkhd', i + 1)) {
+      const start = i - 4, end = start + buf.readUInt32BE(start);
+      if (end > buf.length || end - start < 84) continue;
+      const w = buf.readUInt32BE(end - 8) / 65536, h = buf.readUInt32BE(end - 4) / 65536; // 16.16 fixed point
+      if (w > 0 && h > 0) { width = Math.round(w); height = Math.round(h); break; } // the audio track is 0 x 0
+    }
+    if (!height) return null;
+    return { width, height, size: total, vcodec: buf.includes('avc1') ? 'avc1' : null, acodec: buf.includes('mp4a') ? 'mp4a' : null };
+  } catch { return null; } finally { clearTimeout(t); }
+}
+
+/** Fill in Facebook's progressive formats that yt-dlp leaves without a height (in parallel, a few seconds at most). */
+async function completeFormats(url, formats) {
+  if (!isFacebook(url)) return;
+  const todo = formats.filter((f) => !f.height && f.url && /^https?$/.test(f.protocol || '') && (!f.vcodec || f.vcodec === 'unknown'));
+  await Promise.all(todo.map(async (f) => {
+    const p = await probeMp4(f.url, f.http_headers || {});
+    if (!p) return;
+    // Facebook's progressive files always carry sound; on long videos its marker can be past the first 256 KB
+    Object.assign(f, { width: p.width, height: p.height, vcodec: p.vcodec || f.vcodec, acodec: p.acodec || f.acodec || 'mp4a', probed: true });
+    if (!f.filesize && p.size) f.filesize = p.size;
+  }));
+}
+
 /** List title + formats without downloading. */
 function info(url, o) {
-  return new Promise((resolve, reject) => {
+  return warmUp(o.ytdlp).then(() => new Promise((resolve, reject) => {
     if (!o.ytdlp) return reject(new Error('yt-dlp was not found. See README: "Install yt-dlp".'));
     const p = spawn(o.ytdlp, [...baseArgs({ ...o, url }), '-J', url], { windowsHide: true });
     let out = '';
@@ -141,18 +204,18 @@ function info(url, o) {
       if (code !== 0) return reject(new Error(lastError(err) || `yt-dlp exited with ${code}`));
       try {
         const j = JSON.parse(out);
-        resolve({
+        completeFormats(url, j.formats || []).then(() => resolve({
           title: cleanTitle(j.title, url, j.description, j.id), id: j.id, extractor: j.extractor_key, duration: j.duration, thumbnail: j.thumbnail,
           uploader: j.uploader, webpage_url: j.webpage_url,
           formats: (j.formats || []).filter((f) => f.format_id && !/storyboard|mhtml/.test(f.ext || '') && f.protocol !== 'mhtml').map((f) => ({
             id: f.format_id, ext: f.ext, width: f.width || null, height: f.height || null, fps: f.fps || null,
             vcodec: f.vcodec, acodec: f.acodec, size: f.filesize || f.filesize_approx || null,
-            tbr: f.tbr || null, note: f.format_note || '', protocol: f.protocol,
+            tbr: f.tbr || null, note: f.format_note || '', protocol: f.protocol, probed: !!f.probed,
           })),
-        });
+        }), reject);
       } catch (e) { reject(e); }
     });
-  });
+  }));
 }
 
 /** True for links that point at a playlist (YouTube list=..., /playlist pages). */
@@ -400,5 +463,5 @@ class YtdlpDownload extends EventEmitter {
 
 module.exports = {
   YtdlpDownload, info, playlistInfo, isPlaylistUrl, findTool, resetToolCache, resetRuntimeCache,
-  writeCookiesFile, defaultFormat, toolVersion, resolve, selectionArgs, cleanTitle,
+  writeCookiesFile, defaultFormat, toolVersion, isFolderBuild, warmUp, probeMp4, resolve, selectionArgs, cleanTitle,
 };
