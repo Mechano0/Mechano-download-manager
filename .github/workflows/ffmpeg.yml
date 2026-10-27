@@ -1,0 +1,59 @@
+# Builds Mechano DM's small ffmpeg.exe (tools/ffmpeg/build.sh) and checks that it does every
+# job the app gives it. The result is an artifact named "ffmpeg-win64".
+name: Build small ffmpeg
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - tools/ffmpeg/**
+      - .github/workflows/ffmpeg.yml
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64 make pkg-config
+      - name: Build
+        run: bash tools/ffmpeg/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-win64
+          path: out/
+
+  check:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-win64
+          path: small
+      - name: Full ffmpeg (only to make test files)
+        run: choco install ffmpeg -y --no-progress
+      - name: Test files (made with the full ffmpeg)
+        shell: pwsh
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + $env:Path
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=duration=3:size=320x240:rate=25 -c:v libx264 -an v.mp4
+          ffmpeg -hide_banner -loglevel error -f lavfi -i sine=duration=3 -c:a aac a.m4a
+          ffmpeg -hide_banner -loglevel error -f lavfi -i sine=duration=3 -c:a libopus a.webm
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=duration=3:size=320x240:rate=25 -c:v libvpx-vp9 -an v.webm
+          ffmpeg -hide_banner -loglevel error -i v.mp4 -i a.m4a -c copy -f mpegts both.ts
+      - name: Everything Mechano DM asks of it
+        shell: pwsh
+        run: |
+          $ff = ".\small\ffmpeg.exe"
+          $ErrorActionPreference = 'Stop'
+          function Run($a) { & $ff -hide_banner -loglevel error -y @a; if ($LASTEXITCODE) { throw "failed: $a" } }
+          Run @('-i','v.mp4','-i','a.m4a','-map','0:v:0','-map','1:a:0','-c','copy','-movflags','+faststart','-f','mp4','join.mp4')
+          Run @('-i','v.webm','-i','a.webm','-map','0:v:0','-map','1:a:0','-c','copy','-f','webm','join.webm')
+          Run @('-i','v.webm','-i','a.webm','-c','copy','-f','mp4','vp9opus.mp4')
+          Run @('-i','both.ts','-c','copy','-bsf:a','aac_adtstoasc','-f','mp4','hls.mp4')
+          Run @('-i','a.m4a','-vn','-c:a','libmp3lame','-b:a','192k','-f','mp3','a.mp3')
+          Run @('-i','a.webm','-vn','-c:a','libmp3lame','-q:a','5','-f','mp3','b.mp3')
+          Run @('-i','join.mp4','-c','copy','-f','matroska','join.mkv')
+          Get-ChildItem *.mp4, *.webm, *.mp3, *.mkv | Format-Table Name, Length
+          Get-Item $ff | Format-Table Name, Length
