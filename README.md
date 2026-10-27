@@ -7,7 +7,7 @@ YouTube, Facebook, Instagram, TikTok and more, a scheduler and a Chrome / Edge b
 
 ## Download
 
-**[⬇ Mechano DM Setup.exe](../../releases/latest)** (one file, about 90 MB). Everything is inside: Node.js, yt-dlp and ffmpeg.
+**[⬇ Mechano DM Setup.exe](../../releases/latest)** (one file, about 55 MB). Everything is inside: Node.js, yt-dlp and ffmpeg.
 
 1. Double-click **Mechano DM Setup.exe**, then click **Install**. It needs no admin rights and no internet to install.
 2. Click **Finish**, and Mechano DM opens.

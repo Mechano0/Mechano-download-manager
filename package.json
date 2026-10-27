@@ -1,6 +1,6 @@
 {
   "name": "mechano-download-manager",
-  "version": "1.1.0",
+  "version": "1.0.1",
   "description": "Personal IDM-style download manager: multi-connection segmented downloads, resume, HLS, yt-dlp bridge, browser extension.",
   "license": "MIT",
   "private": true,
