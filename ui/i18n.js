@@ -32,6 +32,8 @@
     'Playlist: every video is downloaded one after another. You can skip or re-order them in the main window.':
       'قائمة تشغيل: الفيديوهات بتتحمّل واحد ورا التاني. تقدر تتخطى أو ترتّب أي فيديو من النافذة الرئيسية.',
     'Save As needs a full path, like D:\\Downloads\\file.zip': 'حفظ باسم محتاج مسار كامل، زي D:\\Downloads\\file.zip',
+    'Save to needs a full folder path, like D:\\Downloads': 'حفظ في محتاج مسار فولدر كامل، زي D:\\Downloads',
+    'A file name can\'t contain \\ / : * ? " < > |': 'اسم الملف ما ينفعش يكون فيه \\ / : * ? " < > |',
     'Choose a full folder path, like D:\\Videos': 'اختار مسار فولدر كامل، زي D:\\Videos',
     'This link is a web page; the video on it will be downloaded with yt-dlp.': 'الرابط ده صفحة ويب؛ الفيديو اللي فيها هيتحمّل بـ yt-dlp.',
 

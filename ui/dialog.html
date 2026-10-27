@@ -76,7 +76,8 @@
   input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
   .ltr { direction: ltr; text-align: left; }
   :root[dir="rtl"] .ltr { text-align: right; unicode-bidi: plaintext; }
-  #saveAs { font-family: inherit; }
+  #saveAs, #fileName { font-family: inherit; }
+  #fileName { font-weight: 600; }
   .check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); cursor: pointer; user-select: none; }
   .sub { grid-column: 2; margin-top: -3px; }
   button { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; height: 32px; padding: 0 14px; cursor: pointer; white-space: nowrap; }
@@ -156,7 +157,10 @@
       </span>
     </div>
 
-    <label for="saveAs">Save As</label>
+    <label for="fileName" id="nameLabel">File name</label>
+    <input type="text" id="fileName" class="ltr loading" translate="no" spellcheck="false" maxlength="200">
+
+    <label for="saveAs">Save to</label>
     <div class="line">
       <input type="text" id="saveAs" class="grow ltr loading" translate="no" spellcheck="false">
       <button type="button" class="icon" id="browse" title="Choose folder" aria-label="Choose folder">
@@ -243,12 +247,10 @@ let job = null, d = null, busy = false;
 let folderAuto = '';      // folder we filled in ourselves (follows the category until you edit it)
 let nameAuto = '';
 
-function splitPath(p) {
-  const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'));
-  return i < 0 ? { dir: '', name: p } : { dir: p.slice(0, i) || p.slice(0, i + 1), name: p.slice(i + 1) };
-}
-function joinPath(dir, name) { return dir ? dir.replace(/[\\/]+$/, '') + '\\' + name : name; }
-function current() { return splitPath($('#saveAs').value.trim()); }
+// "Save to" holds the folder, "File name" the name only (hidden for playlists and torrents, which name themselves)
+function current() { return { dir: $('#saveAs').value.trim().replace(/[\\/]+$/, ''), name: $('#fileName').value.trim() }; }
+function nameRow(show) { $('#nameLabel').hidden = $('#fileName').hidden = !show; }
+const BAD_NAME = /[\\/:*?"<>|]/;
 
 function setNote(text, kind) {
   $('#note').hidden = !text;
@@ -301,19 +303,19 @@ async function load() {
   if (!job) { setNote('This download was already handled.', 'warn'); setTimeout(finished, 1200); return; }
   $('#url').value = job.url;
   $('#url').title = job.url;
-  $('#saveAs').value = job.filename || '';
+  $('#fileName').value = job.filename || '';
   $('#category').innerHTML = `<option>${esc(T('General'))}</option>`; // real list arrives with the details
   showSize(job.total);
   drawType((job.filename || '').split('.').pop(), 'General');
   try {
     d = await api(`/api/jobs/${job.id}/details`, {});
   } catch (e) {
-    $('#saveAs').classList.remove('loading');
+    $('#saveAs').classList.remove('loading'); $('#fileName').classList.remove('loading');
     setNote(e.message, 'warn');
     setBusy(false);
     return;
   }
-  $('#saveAs').classList.remove('loading');
+  $('#saveAs').classList.remove('loading'); $('#fileName').classList.remove('loading');
   // categories
   const cat = $('#category');
   cat.innerHTML = '';
@@ -337,7 +339,9 @@ async function load() {
   // Save As
   folderAuto = d.folder;
   nameAuto = d.fileName || d.name;
-  $('#saveAs').value = d.playlist ? d.folder : joinPath(d.folder, nameAuto);
+  $('#saveAs').value = d.folder;
+  $('#fileName').value = nameAuto;
+  nameRow(!d.playlist && d.kind !== 'torrent');
   $('#saveAs').title = d.playlist ? T('Playlist videos are saved in a folder here') : '';
   $('#remember').checked = (d.remembered || []).includes(d.category);
   setRememberText();
@@ -371,7 +375,7 @@ $('#category').addEventListener('change', () => {
   const cur = current();
   if (d && (cur.dir === folderAuto || !cur.dir)) {
     folderAuto = d.categoryDirs[c];
-    $('#saveAs').value = d.playlist ? folderAuto : joinPath(folderAuto, cur.name || nameAuto);
+    $('#saveAs').value = folderAuto;
   }
   $('#remember').checked = d ? (d.remembered || []).includes(c) : false;
   setRememberText();
@@ -384,8 +388,7 @@ $('#quality').addEventListener('change', () => {
   const audio = $('#quality').value === 'audio';
   const cur = current();
   if (!d.playlist && cur.name) {
-    const name = cur.name.replace(/\.(mp4|mp3)$/i, '') + (audio ? '.mp3' : '.mp4');
-    $('#saveAs').value = joinPath(cur.dir, name);
+    $('#fileName').value = cur.name.replace(/\.(mp4|mp3)$/i, '') + (audio ? '.mp3' : '.mp4');
   }
   const autoCat = audio ? 'Music' : 'Video';
   if ($('#category').value === 'Music' || $('#category').value === 'Video') {
@@ -402,10 +405,18 @@ $('#browse').addEventListener('click', async () => {
   try {
     const cur = current();
     const p = await pickFolder(cur.dir || (d && d.folder) || '');
-    if (p) $('#saveAs').value = d && d.playlist ? p : joinPath(p, cur.name || nameAuto);
+    if (p) $('#saveAs').value = p;
   } catch (e) { setNote(e.message, 'err'); }
   setBusy(false);
   $('#saveAs').focus();
+});
+
+// File name: warn about characters Windows doesn't allow; the type icon follows the extension
+$('#fileName').addEventListener('input', () => {
+  const v = $('#fileName').value;
+  setNote(BAD_NAME.test(v) ? 'A file name can\'t contain \\ / : * ? " < > |' : '', 'warn');
+  const dot = v.lastIndexOf('.');
+  if (dot > 0) drawType(v.slice(dot + 1), $('#category').value);
 });
 
 $('#copyUrl').addEventListener('click', async () => {
@@ -422,13 +433,15 @@ async function finish(action) {
     if (action === 'cancel') {
       await api(`/api/jobs/${job.id}/remove`, { deleteFiles: false });
     } else {
-      const raw = $('#saveAs').value.trim();
+      const p = current();
       const body = { later: action === 'later', category: $('#category').value || undefined, description: $('#desc').value.trim() };
-      if (raw) {
-        const p = d && d.playlist ? { dir: raw, name: '' } : splitPath(raw);
-        if (!/^([a-zA-Z]:[\\/]|\\\\)/.test(p.dir + '\\')) throw new Error('Save As needs a full path, like D:\\Downloads\\file.zip');
-        body.dir = p.dir;
-        if (p.name && p.name !== nameAuto) body.filename = p.name;
+      if (!$('#fileName').hidden && p.name) {
+        if (BAD_NAME.test(p.name)) throw new Error('A file name can\'t contain \\ / : * ? " < > |');
+        if (p.name !== nameAuto) body.filename = p.name;
+      }
+      if (p.dir) {
+        if (!/^([a-zA-Z]:[\\/]?|\\\\)/.test(p.dir)) throw new Error('Save to needs a full folder path, like D:\\Downloads');
+        body.dir = /^[a-zA-Z]:$/.test(p.dir) ? p.dir + '\\' : p.dir;
         body.rememberPath = $('#remember').checked;
       }
       if (!$('#qualityWrap').hidden) body.quality = $('#quality').value;

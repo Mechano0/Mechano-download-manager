@@ -40,6 +40,8 @@
     return s;
   };
   const ICON_DL = 'M11 3h2v9.2l3.6-3.6 1.4 1.4-6 6-6-6 1.4-1.4 3.6 3.6V3zM4 19h16v2H4z';
+  const ICON_ARROW = 'M9.6 4h4.8v7.4h4L12 19l-6.4-7.6h4z';
+  const ICON_X = 'M6.6 5 5 6.6 10.4 12 5 17.4 6.6 19 12 13.6 17.4 19 19 17.4 13.6 12 19 6.6 17.4 5 12 10.4z';
 
   const host = document.createElement('div');
   host.style.cssText = 'all:initial;position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;';
@@ -47,16 +49,25 @@
   const style = el('style');
   style.textContent = `
     :host { all: initial; }
-    .wrap { position: fixed; left: 0; top: 0; display: none; align-items: center; gap: 2px;
+    .wrap { position: fixed; right: 0; top: 0; display: none; align-items: center;
       font: 13px/1.3 "Segoe UI", system-ui, -apple-system, sans-serif; }
-    .btn { display: flex; align-items: center; gap: 6px; border: 0; cursor: pointer; color: #fff;
-      background: linear-gradient(#2f7cf6, #0b4fbf); padding: 6px 12px 6px 10px; border-radius: 6px 0 0 6px;
-      font: 600 13px/1 "Segoe UI", system-ui, sans-serif; box-shadow: 0 2px 8px rgba(0,0,0,.35);
-      opacity: .92; transition: opacity .15s, transform .15s; }
-    .btn:hover { opacity: 1; transform: translateY(-1px); }
-    .x { border: 0; cursor: pointer; color: #fff; background: #0b4fbf; padding: 6px 8px; border-radius: 0 6px 6px 0;
-      font: 600 12px/1 "Segoe UI", sans-serif; opacity: .8; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
-    .x:hover { opacity: 1; }
+    /* the pill: [ (⬇) Download | ✕ ]; after a few seconds unused it shrinks to [ (⬇) | ✕ ] */
+    .pill { display: flex; align-items: stretch; height: 30px; border-radius: 8px; overflow: hidden;
+      background: linear-gradient(#2a66dc, #1d4fb8); border: 1px solid #143e94;
+      box-shadow: 0 2px 10px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.14); opacity: .94; transition: opacity .2s; }
+    .pill:hover { opacity: 1; }
+    .btn { display: flex; align-items: center; gap: 7px; border: 0; margin: 0; cursor: pointer; color: #fff; background: transparent;
+      padding: 0 11px 0 6px; font: 600 13px/1 "Segoe UI", system-ui, sans-serif; transition: padding .25s ease, gap .25s ease; }
+    .ic { width: 20px; height: 20px; border-radius: 50%; background: #e4e8ef; color: #1d55c4; display: flex;
+      align-items: center; justify-content: center; flex: none; }
+    .label { display: inline-block; white-space: nowrap; overflow: hidden; max-width: 90px; opacity: 1;
+      transition: max-width .25s ease, opacity .2s ease; }
+    .mini .btn { gap: 0; padding: 0 7px 0 6px; }
+    .mini .label { max-width: 0; opacity: 0; }
+    .div { width: 1px; margin: 6px 0; background: rgba(255,255,255,.3); flex: none; }
+    .x { border: 0; margin: 0; cursor: pointer; color: #e4e8ef; background: transparent; padding: 0 8px;
+      display: flex; align-items: center; justify-content: center; }
+    .btn:hover, .x:hover { background: rgba(255,255,255,.12); }
     .panel { position: absolute; top: 34px; right: 0; width: 290px; max-height: 70vh; overflow: auto;
       background: #1b1f27; color: #e9edf3; border: 1px solid #2d3443; border-radius: 10px;
       box-shadow: 0 10px 30px rgba(0,0,0,.5); padding: 10px; display: none; }
@@ -81,14 +92,29 @@
     @keyframes r { to { transform: rotate(360deg); } }
   `;
   const wrap = el('div', 'wrap');
+  const pill = el('div', 'pill');
   const btn = el('button', 'btn');
   btn.title = 'Download this video with Mechano DM';
-  btn.append(svg(ICON_DL, 15), el('span', null, 'Download'));
-  const close = el('button', 'x', '✕');
+  const ic = el('span', 'ic');
+  ic.append(svg(ICON_ARROW, 15));
+  btn.append(ic, el('span', 'label', 'Download'));
+  const close = el('button', 'x');
+  close.append(svg(ICON_X, 14));
   close.title = 'Hide for this video';
+  pill.append(btn, el('span', 'div'), close);
   const panel = el('div', 'panel');
-  wrap.append(btn, close, panel);
+  wrap.append(pill, panel);
   root.append(style, wrap);
+
+  // Full size when a new video shows up or the mouse is on it; small after a few seconds unused.
+  let miniTimer = 0, hovering = false, lastKey = '';
+  const setMini = (on) => pill.classList.toggle('mini', on);
+  const shrinkSoon = (ms) => {
+    clearTimeout(miniTimer);
+    miniTimer = setTimeout(() => { if (!panelOpen && !hovering) setMini(true); }, ms);
+  };
+  pill.addEventListener('mouseenter', () => { hovering = true; clearTimeout(miniTimer); setMini(false); });
+  pill.addEventListener('mouseleave', () => { hovering = false; shrinkSoon(1200); });
 
   const attach = () => {
     const fs = document.fullscreenElement;
@@ -129,15 +155,18 @@
 
   function place() {
     if (!(panelOpen && current && current.isConnected)) current = pick();
-    if (!current) { wrap.style.display = 'none'; closePanel(); return; }
+    if (!current) { wrap.style.display = 'none'; closePanel(); lastKey = ''; return; }
     attach();
+    const key = videoKey(current);
+    if (key !== lastKey) { lastKey = key; setMini(false); shrinkSoon(4000); }
     const r = current.getBoundingClientRect();
     wrap.style.display = 'flex';
-    const w = wrap.offsetWidth || 130;
+    const w = pill.offsetWidth || 130;
     const vw = document.documentElement.clientWidth || innerWidth; // excludes the scrollbar
-    const left = Math.max(4, Math.min(vw - w - 6, r.right - w - 10));
+    // anchored by its right edge, so shrinking keeps it in the video's corner
+    const right = Math.max(6, Math.min(vw - w - 4, vw - r.right + 10));
     const top = Math.max(4, Math.min(innerHeight - 40, r.top + 10));
-    wrap.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+    wrap.style.transform = `translate(${-Math.round(right)}px, ${Math.round(top)}px)`;
     panel.classList.toggle('up', top > innerHeight - 330);
   }
 
@@ -256,6 +285,8 @@
   async function openPanel() {
     if (!current) return;
     panelOpen = true;
+    clearTimeout(miniTimer);
+    setMini(false);
     const t = resolveTarget(current);
     const loading = el('div', 'muted');
     loading.append(el('span', 'spin'), t.site ? `Getting qualities from ${t.site}…` : 'Looking for downloadable media…');
@@ -322,8 +353,10 @@
   }
 
   function closePanel() {
+    const wasOpen = panelOpen;
     panelOpen = false;
     panel.style.display = 'none';
+    if (wasOpen) shrinkSoon(1500);
   }
 
   btn.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); panelOpen ? closePanel() : openPanel(); });
