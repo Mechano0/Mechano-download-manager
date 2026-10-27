@@ -118,6 +118,9 @@
     'Find files': 'دوّر على الملفات', 'Download selected': 'حمّل المحدد', 'Looking for files…': 'بندوّر على الملفات…',
     'More extensions: .iso .dwg': 'امتدادات تانية: .iso .dwg', 'Close Site Grabber': 'اقفل جرّاب المواقع', 'Updating…': 'بيتحدّث…', 'Scheduler saved (off)': 'الجدولة اتحفظت (مقفولة)', 'Download method: Auto': 'طريقة التحميل: تلقائي',
     'Added to the scheduler. Open ⏰ to turn it on and pick a time.': 'اتضاف للجدولة. افتح ⏰ عشان تشغّلها وتختار ميعاد.',
+    'Downloading': 'جاري التحميل', 'Downloaded': 'اتحمّل', 'Speed': 'السرعة', 'Waiting in queue': 'في الانتظار', 'Starting…': 'بيبدأ…',
+    'Paused': 'متوقف', 'Waiting for the scheduler': 'مستني الجدولة', 'Download complete': 'اكتمل التحميل', 'Error': 'خطأ', 'Close': 'إغلاق',
+    'Minimize': 'تصغير', 'Hide to the notification area': 'إخفاء في الأيقونات المخفية', 'The download continues if you close this window.': 'التحميل هيكمل حتى لو قفلت النافذة دي.',
     'Copy': 'نسخ', 'Support': 'ادعمنا', 'Support Mechano DM': 'ادعم Mechano DM', 'Send with PayPal': 'ابعت عن طريق PayPal', 'Send with Payoneer': 'ابعت عن طريق Payoneer', 'Open InstaPay': 'افتح InstaPay',
     'Mechano DM is free. If it helps you, you can support its development:': 'Mechano DM مجاني. لو بيفيدك، تقدر تدعم تطويره:', 'InstaPay address copied.': 'عنوان InstaPay اتنسخ.',
   };

@@ -111,6 +111,37 @@
   .foot { display: flex; align-items: center; gap: 8px; padding: 11px 18px; border-top: 1px solid var(--line); background: var(--raised); flex-wrap: wrap; }
   .foot .spacer { flex: 1; }
 
+  /* own title bar when shown in Mechano DM's window: drag here; hide-to-tray, minimize, close */
+  .winbtns { display: none; margin-inline-start: 8px; gap: 2px; }
+  .own-frame .head { padding-block: 6px; padding-inline-end: 6px; user-select: none; cursor: default; }
+  .own-frame .winbtns { display: flex; }
+  .own-frame .head .count { margin-inline-start: auto; }
+  .own-frame .head .count:empty + .winbtns { margin-inline-start: auto; }
+  .winbtns button { width: 40px; height: 32px; border: 0; border-radius: 6px; background: transparent; padding: 0;
+    display: grid; place-items: center; color: var(--muted); }
+  .winbtns button:hover { background: var(--raised); color: var(--text); }
+  .winbtns #wClose:hover { background: #c42b1c; color: #fff; }
+  .winbtns svg { width: 16px; height: 16px; }
+
+  /* progress view (after Start Download) */
+  .prog { flex: 1; padding: 16px 20px 6px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .prog .pname { font: 600 14px/1.35 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prog .purl { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: -9px; }
+  .bar { position: relative; height: 26px; border-radius: 7px; background: var(--raised); border: 1px solid var(--line); overflow: hidden; }
+  .bar .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width .6s ease; }
+  :root[dir="rtl"] .bar .fill { inset: 0 0 0 auto; }
+  .bar.ok .fill { background: var(--ok); }
+  .bar.paused .fill { background: var(--warn); }
+  .bar.err .fill { background: var(--err); }
+  .bar.unknown .fill { width: 100% !important; opacity: .35;
+    background: repeating-linear-gradient(45deg, var(--accent) 0 12px, transparent 12px 24px); background-size: 34px 34px; animation: stripes 1s linear infinite; }
+  @keyframes stripes { to { background-position: 34px 0; } }
+  .bar .pct { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 700; font-size: 12.5px; color: var(--text); }
+  .stats { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 6px 12px; font-size: 12.5px; }
+  .stats dt { color: var(--muted); } .stats dd { margin: 0; font-weight: 600; }
+
   @media (max-width: 560px) {
     .body { grid-template-columns: 1fr; }
     .card { flex-direction: row; justify-content: flex-start; text-align: start; }
@@ -124,7 +155,32 @@
   <img src="/logo.png?v=2" alt="">
   <h1>Download File Info</h1>
   <span class="count" id="count"></span>
+  <span class="winbtns">
+    <button type="button" id="wHide" title="Hide to the notification area" aria-label="Hide to the notification area" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10M8 10l4 4 4-4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+    </button>
+    <button type="button" id="wMin" title="Minimize" aria-label="Minimize">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 12h12"/></svg>
+    </button>
+    <button type="button" id="wClose" title="Close" aria-label="Close">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </span>
 </div>
+
+<section class="prog" id="prog" hidden>
+  <div class="pname" id="pName" translate="no"></div>
+  <div class="purl ltr" id="pUrl" translate="no"></div>
+  <div class="bar unknown" id="pBar" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+    <div class="fill" id="pFill"></div><div class="pct" id="pPct" dir="ltr"></div>
+  </div>
+  <dl class="stats">
+    <dt>Status</dt><dd id="pStatus">…</dd>
+    <dt>Downloaded</dt><dd id="pDone" dir="ltr">…</dd>
+    <dt>Speed</dt><dd id="pSpeed" dir="ltr">…</dd>
+    <dt>Time left</dt><dd id="pEta" dir="ltr">…</dd>
+  </dl>
+</section>
 
 <div class="body">
   <aside class="card" aria-label="File">
@@ -191,6 +247,12 @@
   <button type="button" id="cancel">Cancel</button>
   <button type="button" id="later">Download Later</button>
   <button type="button" class="primary" id="start">Start Download</button>
+</div>
+<div class="foot" id="pFoot" hidden>
+  <span class="hint" id="pHint">The download continues if you close this window.</span>
+  <span class="spacer"></span>
+  <button type="button" id="pPause">Pause</button>
+  <button type="button" id="pClose">Close</button>
 </div>
 
 <script>
@@ -447,7 +509,12 @@ async function finish(action) {
       if (!$('#qualityWrap').hidden) body.quality = $('#quality').value;
       const n = Number($('#conn').value);
       if (!$('#connRow').hidden && n >= 1 && n <= 32 && (!d || n !== d.connections)) body.connections = n;
-      await api(`/api/jobs/${job.id}/confirm`, body);
+      // In the app window the dialog stays open and shows the progress (like IDM); tell the window
+      // first so it doesn't close itself when the job leaves the "confirm" state.
+      if (action === 'start' && hostView) tellHost({ type: 'starting' });
+      try { await api(`/api/jobs/${job.id}/confirm`, body); }
+      catch (e) { if (action === 'start' && hostView) tellHost({ type: 'start-failed' }); throw e; }
+      if (action === 'start' && hostView) { showProgress(body.filename || current().name || job.filename); return; }
     }
     finished();
   } catch (e) {
@@ -458,7 +525,78 @@ async function finish(action) {
 $('#start').addEventListener('click', () => finish('start'));
 $('#later').addEventListener('click', () => finish('later'));
 $('#cancel').addEventListener('click', () => finish('cancel'));
+
+// ---------------------------------------------------------------- progress view
+let progress = false, progTimer = null, lastStatus = null;
+const STATUS_TEXT = { queued: 'Waiting in queue', starting: 'Starting…', downloading: 'Downloading', paused: 'Paused',
+  scheduled: 'Waiting for the scheduler', done: 'Download complete', error: 'Error' };
+
+function showProgress(name) {
+  progress = true;
+  for (const s of ['.body', '#note', '.foot:not(#pFoot)']) $(s).hidden = true;
+  $('#prog').hidden = $('#pFoot').hidden = false;
+  $('#wHide').hidden = false;
+  $('.head h1').textContent = T('Downloading');
+  $('#count').textContent = '';
+  $('#pName').textContent = name || job.url;
+  $('#pName').title = name || '';
+  $('#pUrl').textContent = job.url;
+  tellHost({ type: 'progress', w: 560, h: 300 });
+  tick();
+  progTimer = setInterval(tick, 1000);
+}
+
+async function tick() {
+  let j;
+  try { j = (await api('/api/jobs')).find((x) => x.id === job.id); } catch { return; } // engine busy: next second
+  if (!j) { clearInterval(progTimer); finished(); return; } // removed in the main window
+  if (j.filename) { $('#pName').textContent = j.filename; $('#pName').title = j.filename; }
+  const size = j.size || j.total || 0;
+  const done = j.status === 'done' ? (size || j.downloaded) : (j.downloaded || 0);
+  const pct = size ? Math.min(100, Math.floor(done / size * 100)) : null;
+  const bar = $('#pBar');
+  bar.className = 'bar' + (pct == null && j.status !== 'done' ? ' unknown' : '') +
+    (j.status === 'done' ? ' ok' : j.status === 'paused' ? ' paused' : j.status === 'error' ? ' err' : '');
+  $('#pFill').style.width = (j.status === 'done' ? 100 : pct || 0) + '%';
+  $('#pPct').textContent = j.status === 'done' ? '100%' : pct == null ? '' : pct + '%';
+  bar.setAttribute('aria-valuenow', pct == null ? '' : pct);
+  document.title = (pct == null ? '' : pct + '% - ') + (j.filename || '');
+  $('#pStatus').textContent = T(STATUS_TEXT[j.status] || j.status);
+  $('#pDone').textContent = fmtBytes(done) ? fmtBytes(done) + (size ? ' / ' + fmtBytes(size) : '') : '—';
+  const running = j.status === 'downloading';
+  $('#pSpeed').textContent = running && j.speed ? fmtBytes(j.speed) + '/s' : '—';
+  $('#pEta').textContent = running && j.eta != null && isFinite(j.eta) ? fmtTime(j.eta) : '—';
+  $('#pPause').textContent = T(j.status === 'paused' ? 'Resume' : j.status === 'error' ? 'Retry' : 'Pause');
+  $('#pPause').disabled = j.status === 'done' || j.status === 'scheduled';
+  if (j.status === 'error') { $('#note').hidden = false; setNote(j.error || 'Error', 'err'); }
+  else if (lastStatus === 'error') setNote('');
+  if (j.status === 'done' && lastStatus !== 'done') {
+    clearInterval(progTimer);
+    setTimeout(finished, 900); // the "Download complete" window takes over
+  }
+  lastStatus = j.status;
+}
+
+$('#pPause').addEventListener('click', async () => {
+  $('#pPause').disabled = true;
+  try { await api(`/api/jobs/${job.id}/${lastStatus === 'paused' || lastStatus === 'error' ? 'resume' : 'pause'}`, {}); }
+  catch (e) { $('#note').hidden = false; setNote(e.message, 'err'); }
+  await tick();
+});
+$('#pClose').addEventListener('click', () => finished());
+
+// own title bar (app window only): drag, hide to tray, minimize, close
+if (hostView) {
+  document.body.classList.add('own-frame');
+  $('.head').addEventListener('mousedown', (e) => { if (e.button === 0 && !e.target.closest('button')) tellHost({ type: 'drag' }); });
+  $('#wHide').addEventListener('click', () => tellHost({ type: 'hide' }));
+  $('#wMin').addEventListener('click', () => tellHost({ type: 'minimize' }));
+  // before Start, closing = Cancel (the window removes the job); after it, the download keeps going
+  $('#wClose').addEventListener('click', () => (progress ? finished() : tellHost({ type: 'close' })));
+}
+
 document.addEventListener('keydown', (e) => {
+  if (progress) { if (e.key === 'Escape') { e.preventDefault(); finished(); } return; }
   if (e.key === 'Escape') { e.preventDefault(); finish('cancel'); }
   else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON' && e.target.tagName !== 'SELECT') { e.preventDefault(); finish('start'); }
 });

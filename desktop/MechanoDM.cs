@@ -225,6 +225,9 @@ class Host : ApplicationContext
     readonly ToolStripMenuItem miOpen = new ToolStripMenuItem("Open Mechano DM");
     readonly ToolStripMenuItem miFolder = new ToolStripMenuItem("Open downloads folder");
     readonly ToolStripMenuItem miExit = new ToolStripMenuItem("Exit");
+    readonly ToolStripMenuItem miHidden = new ToolStripMenuItem("Show download windows");
+    readonly List<WebConfirmForm> progressWindows = new List<WebConfirmForm>();
+    bool toldAboutHidden;
     ClipboardWatcher clip;
     bool clipboardOn = true;
     string language = "auto";
@@ -254,6 +257,9 @@ class Host : ApplicationContext
         miOpen.Click += delegate { ShowMain(); };
         miOpen.Font = new Font(miOpen.Font, FontStyle.Bold);
         menu.Items.Add(miOpen);
+        miHidden.Visible = false;
+        miHidden.Click += delegate { ShowHiddenWindows(); };
+        menu.Items.Add(miHidden);
         miFolder.Click += delegate { OpenDownloads(); };
         menu.Items.Add(miFolder);
         miStartup.Checked = File.Exists(StartupLink);
@@ -440,7 +446,7 @@ class Host : ApplicationContext
             }
             first = false;
             // Approved or cancelled somewhere else (main window, another PC tab): close the floating window.
-            if (confirm != null && !confirm.IsDisposed)
+            if (confirm != null && !confirm.IsDisposed && !confirm.Keep)
             {
                 string cs;
                 if (!lastStatus.TryGetValue(confirm.JobId, out cs) || cs != "confirm") { confirm.Silent = true; confirm.Close(); }
@@ -531,16 +537,52 @@ class Host : ApplicationContext
     {
         PopupForm f = web ? (PopupForm)new WebConfirmForm(api, id) : new ConfirmForm(api, id, confirmQueue.Count);
         confirm = (IConfirmWindow)f;
+        var wf = f as WebConfirmForm;
+        if (wf != null)
+        {
+            // After Start the window stays as a progress window; the next new download gets its own window.
+            wf.ProgressStarted += delegate
+            {
+                if (confirm == wf) confirm = null;
+                progressWindows.Add(wf);
+                invoker.BeginInvoke((Action)NextConfirm);
+            };
+            wf.HiddenToTray += delegate
+            {
+                UpdateHiddenMenu();
+                if (!toldAboutHidden)
+                {
+                    toldAboutHidden = true;
+                    tray.ShowBalloonTip(4000, Program.L("The download continues", "التحميل مكمل"),
+                        Program.L("Right-click this icon → Show download windows to see it again.", "كليك يمين على الأيقونة دي ← اعرض نوافذ التحميل عشان تظهر تاني."), ToolTipIcon.Info);
+                }
+            };
+        }
         f.FormClosed += delegate
         {
             bool failed = ((IConfirmWindow)f).Failed;
-            confirm = null;
+            if (wf != null && progressWindows.Remove(wf)) { UpdateHiddenMenu(); return; } // a progress window closed
+            if (confirm == f) confirm = null;
             // WebView2 could not start: show the same download in the simple window
             if (failed) invoker.BeginInvoke((Action)(() => ShowConfirm(id, false)));
             else invoker.BeginInvoke((Action)NextConfirm);
         };
         f.Show();
         f.BringToTop();
+    }
+
+    /** Tray menu entry for progress windows hidden in the notification area. */
+    void UpdateHiddenMenu()
+    {
+        int n = progressWindows.Count(w => !w.IsDisposed && !w.Visible);
+        miHidden.Visible = n > 0;
+        miHidden.Text = Program.L("Show download windows", "اعرض نوافذ التحميل") + " (" + n + ")";
+    }
+
+    void ShowHiddenWindows()
+    {
+        foreach (var w in progressWindows.ToArray()) if (!w.IsDisposed && !w.Visible) w.ShowAgain();
+        UpdateHiddenMenu();
     }
 
     void ShowComplete(Dictionary<string, object> j)
@@ -619,6 +661,7 @@ class Host : ApplicationContext
         tray.Visible = false;
         foreach (var f in completes.ToArray()) f.Close();
         if (confirm != null) { confirm.Silent = true; confirm.Close(); }
+        foreach (var w in progressWindows.ToArray()) { w.Silent = true; w.Close(); }
         if (main != null) main.Close();
         try { if (engine != null && !engine.HasExited) engine.Kill(); } catch { }
         ExitThread();
@@ -754,6 +797,7 @@ interface IConfirmWindow
     string JobId { get; }
     bool Silent { get; set; }
     bool Failed { get; }
+    bool Keep { get; }
     void Close();
     bool IsDisposed { get; }
 }
@@ -769,13 +813,20 @@ class WebConfirmForm : PopupForm, IConfirmWindow
     public bool Silent { get; set; }
     public bool Failed { get; private set; }
     public string JobId { get { return id; } }
+    /** Start was pressed: the page asked to stay open while the job leaves the "confirm" state. */
+    public bool Keep { get; private set; }
+    /** The window now shows the download's progress (Host stops treating it as the confirm window). */
+    public event Action ProgressStarted;
+    /** The user hid the window in the notification area. */
+    public event Action HiddenToTray;
 
     public WebConfirmForm(Api api, string id)
     {
         this.api = api;
         this.id = id;
         Text = "Download File Info - Mechano DM";
-        FormBorderStyle = FormBorderStyle.FixedDialog;
+        // The page draws its own title bar (hide to tray, minimize, close), like IDM's progress window.
+        FormBorderStyle = FormBorderStyle.None;
         MaximizeBox = false;
         MinimizeBox = true;
         ShowInTaskbar = true;
@@ -783,7 +834,7 @@ class WebConfirmForm : PopupForm, IConfirmWindow
         ClientSize = new Size(660, 470);
         bool dark = Native.SystemUsesDarkMode();
         BackColor = dark ? Color.FromArgb(24, 27, 31) : Color.White;
-        HandleCreated += delegate { Native.UseDarkTitleBar(Handle, dark); };
+        HandleCreated += delegate { Native.UseDarkTitleBar(Handle, dark); Native.RoundCorners(Handle); };
         FormClosing += delegate (object s, FormClosingEventArgs e)
         {
             // Closing with X = Cancel (but not when the app exits or the page already finished)
@@ -831,6 +882,13 @@ class WebConfirmForm : PopupForm, IConfirmWindow
         try { m = new JavaScriptSerializer().DeserializeObject(json) as Dictionary<string, object>; } catch { }
         string type = Api.Str(m, "type");
         if (type == "done") { done = true; Close(); }
+        else if (type == "close") Close(); // before Start: FormClosing cancels the download
+        else if (type == "starting") Keep = true;
+        else if (type == "start-failed") Keep = false;
+        else if (type == "progress") StartProgress(m);
+        else if (type == "drag") { Native.ReleaseCapture(); Native.SendMessage(Handle, 0xA1 /* WM_NCLBUTTONDOWN */, (IntPtr)2 /* HTCAPTION */, IntPtr.Zero); }
+        else if (type == "minimize") WindowState = FormWindowState.Minimized;
+        else if (type == "hide") { Hide(); if (HiddenToTray != null) HiddenToTray(); }
         else if (type == "theme")
         {
             bool dark = m.ContainsKey("dark") && Convert.ToBoolean(m["dark"]);
@@ -849,12 +907,50 @@ class WebConfirmForm : PopupForm, IConfirmWindow
             try { web.CoreWebView2.PostWebMessageAsJson("{\"type\":\"folder\",\"path\":" + Api.Q(chosen) + "}"); } catch { }
         }
     }
+
+    /** After Start: smaller window, no longer on top of everything, closing it no longer cancels. */
+    void StartProgress(Dictionary<string, object> m)
+    {
+        done = true;
+        Keep = true;
+        TopMost = false;
+        Text = Program.L("Downloading - Mechano DM", "جاري التحميل - Mechano DM");
+        int w = 560, h = 300;
+        try { w = Convert.ToInt32(m["w"]); h = Convert.ToInt32(m["h"]); } catch { }
+        float scale;
+        using (var g = CreateGraphics()) scale = g.DpiX / 96f;
+        var center = new Point(Left + Width / 2, Top + Height / 2);
+        ClientSize = new Size((int)(w * scale), (int)(h * scale));
+        Location = new Point(center.X - Width / 2, center.Y - Height / 2);
+        if (ProgressStarted != null) ProgressStarted();
+    }
+
+    /** Back from the notification area. */
+    public void ShowAgain()
+    {
+        Show();
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Activate();
+        Native.SetForegroundWindow(Handle);
+    }
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.ClassStyle |= 0x20000;                // CS_DROPSHADOW: a shadow without the Windows frame
+            cp.Style |= 0x00020000 | 0x00080000;     // WS_MINIMIZEBOX | WS_SYSMENU: taskbar click minimizes / restores
+            return cp;
+        }
+    }
 }
 
 // ====================================================================== "New download" window (simple fallback)
 class ConfirmForm : PopupForm, IConfirmWindow
 {
     public bool Failed { get { return false; } }
+    public bool Keep { get { return false; } }
     readonly Api api;
     readonly string id;
     readonly Label name, meta, url, note, count;
@@ -1184,6 +1280,16 @@ static class Native
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr CreateJobObject(IntPtr a, string name);
     [DllImport("kernel32.dll")] public static extern bool SetInformationJobObject(IntPtr job, int infoClass, IntPtr info, uint len);
     [DllImport("kernel32.dll")] public static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("user32.dll")] public static extern bool ReleaseCapture();
+    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+
+    /** Windows 11 rounded corners for a window without the Windows frame (ignored on Windows 10). */
+    public static void RoundCorners(IntPtr h)
+    {
+        int v = 2; // DWMWCP_ROUND
+        try { DwmSetWindowAttribute(h, 33, ref v, 4); } catch { }
+    }
 
     public static void UseDarkTitleBar(IntPtr h, bool dark)
     {

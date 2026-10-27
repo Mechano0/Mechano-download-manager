@@ -78,6 +78,13 @@ class Manager extends EventEmitter {
       j.speed = 0;
       this.jobs.set(j.id, j);
     }
+    // Work folders of downloads that are gone or finished (e.g. removed while the app was closed).
+    try {
+      for (const id of fs.readdirSync(path.join(dataDir, 'work'))) {
+        const j = this.jobs.get(id);
+        if (!j || j.status === 'done') fs.rmSync(path.join(dataDir, 'work', id), { recursive: true, force: true });
+      }
+    } catch { /* no work folder yet */ }
     // Older saved jobs have no queue position yet: number them by when they were added.
     let n = 0;
     for (const j of [...this.jobs.values()].sort((a, b) => a.createdAt - b.createdAt)) {
@@ -430,16 +437,49 @@ class Manager extends EventEmitter {
     const job = this.mustGet(id);
     const r = this.runners.get(id);
     if (r) { r.pause(); await new Promise((res) => r.once('settled', res)); }
-    if (deleteFiles) {
-      for (const p of [job.target && job.target + '.mdmpart', job.target && job.target + '.mdmpart.json', job.target && job.target + '.mdmhls']) {
-        if (p) fs.rmSync(p, { recursive: true, force: true });
-      }
-      if (job.file) fs.rmSync(job.file, { force: true });
+    // Unfinished pieces always go, so a removed download leaves nothing behind; the finished
+    // file is deleted only when asked.
+    if (job.status !== 'done') this.removePartials(job);
+    else fs.rmSync(this.workPath(job), { recursive: true, force: true });
+    if (deleteFiles && job.file) {
+      try { fs.rmSync(job.file, { recursive: !!job.playlist, force: true }); } catch { /* in use: leave it */ }
     }
     this.dropSecrets(job);
     this.jobs.delete(id);
     this.persist();
     this.emit('removed', id);
+  }
+
+  // --- unfinished pieces --------------------------------------------------------
+  workPath(job) { return path.join(this.dataDir, 'work', job.id); }
+
+  /**
+   * Where a job keeps its unfinished pieces: data\work\<id>, so the save folder only gets finished
+   * files. Jobs that already have pieces next to the file (from older versions) keep them there,
+   * so they still resume.
+   */
+  workDirFor(job) {
+    if (job.kind === 'torrent') return null; // aria2 manages its own files
+    if (!job.useWork && (job.downloaded > 0 || job.target)) return null;
+    job.useWork = true;
+    return this.workPath(job);
+  }
+
+  /** Delete a job's unfinished pieces: its work folder, plus pieces older versions left next to the file. */
+  removePartials(job) {
+    const rm = (p) => { try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* in use */ } };
+    rm(this.workPath(job));
+    if (job.target) for (const s of ['.mdmpart', '.mdmpart.json', '.mdmhls', '.video.tmp', '.audio.tmp']) rm(job.target + s);
+    if (job.kind !== 'ytdlp' || !job.dir || job.playlist) return;
+    // yt-dlp pieces: "<name>.<ext>.part", ".part-Frag12", ".part-Frag12.part", ".ytdl", "<name>.f137.mp4.part"...
+    const names = [job.customName, job.filename].filter(Boolean).map((n) => n.replace(/\.(mp4|mp3|webm|mkv|m4a)$/i, ''));
+    if (!names.length) return;
+    let list = [];
+    try { list = fs.readdirSync(job.dir); } catch { return; }
+    for (const f of list) {
+      if (!/\.(part|ytdl)$|\.part-Frag\d+(\.part)?$|\.mdmpart(\.json)?$/i.test(f)) continue;
+      if (names.some((n) => f.startsWith(n + '.') || f.startsWith(n + ' ['))) rm(path.join(job.dir, f));
+    }
   }
 
   mustGet(id) {
@@ -532,6 +572,7 @@ class Manager extends EventEmitter {
         job.speed = 0; job.eta = 0;
         job.finishedAt = Date.now();
         this.dropSecrets(job);
+        fs.rm(this.workPath(job), { recursive: true, force: true }, () => {});
       }
     }).catch((err) => {
       if (runner.userPaused) { job.status = 'paused'; return; }
@@ -561,6 +602,7 @@ class Manager extends EventEmitter {
     if (job.userAgent) headers['user-agent'] = job.userAgent;
     if (job.referrer) headers.referer = job.referrer;
 
+    const workDir = this.workDirFor(job);
     if (job.kind === 'ytdlp') {
       let cookiesFile = null;
       if (job.cookies && job.cookies.length) cookiesFile = writeCookiesFile(path.join(this.dataDir, 'cookies', job.id + '.txt'), job.cookies);
@@ -577,6 +619,7 @@ class Manager extends EventEmitter {
         limiter: this.limiter,
         connections: job.connections || cfg.connections,
         cookieFor: (u) => cookieHeader(job.cookies, u),
+        workDir,
       };
       // Playlists: video by video, so each one can be watched, skipped or re-ordered
       if (job.playlist) return new PlaylistDownload(job, opts);
@@ -597,6 +640,7 @@ class Manager extends EventEmitter {
       return new HlsDownload({
         url: job.url, dir: dirFor('x.mp4'), target: job.target, filename: job.filename, headers,
         concurrency: job.connections || cfg.hlsConcurrency, maxHeight: job.maxHeight, ffmpeg: tools.ffmpeg, limiter: this.limiter,
+        workDir,
       });
     }
 
@@ -604,6 +648,7 @@ class Manager extends EventEmitter {
     const seg = new SegmentedDownload({
       url: job.url, dir: cfg.downloadDir, target: job.target, filename: job.filename, headers,
       connections: job.connections || cfg.connections, limiter: this.limiter,
+      workDir,
     });
     const origStart = seg.start.bind(seg);
     seg.start = async () => {

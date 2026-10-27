@@ -213,8 +213,7 @@ function createServer(manager, { updater = null, scheduler = null, selfUpdater =
         }
         if (action === 'reveal') {
           const job = manager.mustGet(id);
-          const target = job.file || job.target;
-          if (target && process.platform === 'win32') spawn('explorer.exe', [`/select,${target}`], { detached: true, windowsHide: false }).unref();
+          if (process.platform === 'win32') revealInExplorer(job);
           return send(res, 200, { ok: true });
         }
         return send(res, 404, { error: 'Unknown action' });
@@ -273,6 +272,26 @@ function createServer(manager, { updater = null, scheduler = null, selfUpdater =
 }
 
 /** Interface language: 'en' / 'ar'; "auto" follows Windows (the page falls back to the browser language). */
+/**
+ * Show a download in Explorer. Explorer needs `/select,"C:\path with spaces\file"`: Node's own quoting
+ * wraps the whole `/select,...` argument in quotes, which Explorer doesn't understand, so it opened Documents.
+ * Unfinished or moved files: open the folder instead.
+ */
+function revealInExplorer(job) {
+  const target = job.file || job.target;
+  const open = (args) => spawn('explorer.exe', [args], { detached: true, windowsHide: false, windowsVerbatimArguments: true }).unref();
+  const quote = (p) => `"${String(p).replace(/"/g, '')}"`; // Windows paths can't contain quotes
+  try {
+    if (target && fs.existsSync(target)) {
+      if (fs.statSync(target).isDirectory()) return open(quote(target)); // playlist / torrent folder
+      return open(`/select,${quote(target)}`);
+    }
+  } catch { /* fall through to the folder */ }
+  const dir = target ? path.dirname(target) : job.dir;
+  if (dir && fs.existsSync(dir)) open(quote(dir));
+  else if (job.dir && fs.existsSync(job.dir)) open(quote(job.dir));
+}
+
 function uiLanguage(setting) {
   if (setting === 'ar' || setting === 'en') return setting;
   try { if (/^ar\b/i.test(Intl.DateTimeFormat().resolvedOptions().locale)) return 'ar'; } catch { /* no Intl data */ }

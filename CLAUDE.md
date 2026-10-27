@@ -19,6 +19,8 @@ IDM-style download manager for Windows. Owner: Eslam (talks in Egyptian Arabic; 
   ("Download File Info" window: own WebView2 window `WebConfirmForm` in the app, iframe in the page; old WinForms `ConfirmForm` = fallback),
   `ui/i18n.js` (Arabic + RTL: exact-string dictionary + regex patterns + MutationObserver; mark names/paths `translate="no"`).
   Server injects `__MDM_TOKEN__` and `__MDM_LANG__`. Extension (MV3, Chrome/Edge): `extension/`; Firefox: `node tools/build-firefox.js`.
+- Unfinished pieces (.mdmpart, HLS segments, yt-dlp .part/-Frag via `-P temp:`) live in `data\work\<job id>`, never in the save folder;
+  removing an unfinished job always deletes them (manager.removePartials), finished jobs clean it, startup prunes orphans.
 - Data: `data/` (config.json has the private token — never share/copy). Downloads: `%USERPROFILE%\Downloads\M.DM\<Category>`.
 
 ## Commands

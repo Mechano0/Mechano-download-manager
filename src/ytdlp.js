@@ -366,6 +366,8 @@ class YtdlpDownload extends EventEmitter {
       ...base,
       ...selectionArgs(o),
       '-P', o.dir,
+      // .part / -Frag / .ytdl files wait in the job's work folder; yt-dlp moves only the finished file here
+      ...(o.workDir ? ['-P', `temp:${o.workDir}`] : []),
       '-o', outTemplate(o),
       '-N', String(o.fragments || 4),
       '--newline', '--progress', '--no-simulate',
@@ -388,13 +390,17 @@ class YtdlpDownload extends EventEmitter {
       let buf = '';
       let partBase = 0; // yt-dlp downloads video then audio; keep the bar monotonic
       let lastTotal = 0;
+      let lastD = 0;
       let item = null; // playlist position { index, count, title }
       const onLine = (line) => {
         if (line.startsWith('MDM|')) {
           const [, d, t, te, sp, eta] = line.split('|').map((x) => (x === 'NA' || x === 'None' ? null : Number(x)));
           const total = t || te || null;
-          if (total && lastTotal && total !== lastTotal && d < 0.05 * total) partBase += lastTotal; // next stream
+          // Next stream (video then audio): the byte count restarts near zero. HLS/DASH fragments
+          // change total_bytes_estimate on every update, so a changing total alone is not a new stream.
+          if (lastTotal && d != null && d < 0.5 * lastD && d < 0.05 * (total || lastTotal)) partBase += lastTotal;
           if (total) lastTotal = total;
+          if (d != null) lastD = d;
           this.emit('progress', {
             downloaded: partBase + (d || 0), size: total ? partBase + total : null, speed: sp || 0, eta: eta ?? null,
             connections: o.fragments || 4,
@@ -405,7 +411,7 @@ class YtdlpDownload extends EventEmitter {
         } else if (line.startsWith('MDMITEM|')) {
           const [, idx, count, plTitle, ...rest] = line.split('|');
           item = { index: Number(idx) || null, count: Number(count) || null, title: rest.join('|') };
-          partBase = 0; lastTotal = 0; // new video: restart the per-video bar
+          partBase = 0; lastTotal = 0; lastD = 0; // new video: restart the per-video bar
           this.emit('meta', { filename: `${plTitle} (${item.count || '?'} videos)`, playlistTitle: plTitle, playlistCount: item.count });
           this.emit('log', `Video ${item.index || '?'} of ${item.count || '?'}: ${item.title}`);
         } else if (line.startsWith('MDMFILE|')) {

@@ -69,11 +69,14 @@ class SegmentedDownload extends EventEmitter {
       const same = path.join(o.dir, name);
       // An unfinished download of the same URL already exists here -> continue it.
       let prior = null;
-      try { prior = JSON.parse(fs.readFileSync(same + '.mdmpart.json', 'utf8')); } catch { /* none */ }
+      const priorState = o.workDir ? path.join(o.workDir, name + '.mdmpart.json') : same + '.mdmpart.json';
+      try { prior = JSON.parse(fs.readFileSync(priorState, 'utf8')); } catch { /* none */ }
       o.target = prior && prior.url === o.url ? same : uniquePath(o.dir, name);
     }
     this.target = o.target;
-    this.part = this.target + '.mdmpart';
+    // Unfinished data lives in the job's work folder (inside Mechano DM), so the save folder only
+    // ever gets the finished file. Older downloads without one keep "<target>.mdmpart" next to it.
+    this.part = o.workDir ? path.join(o.workDir, path.basename(this.target) + '.mdmpart') : this.target + '.mdmpart';
     this.statePath = this.part + '.json';
     this.emit('meta', { target: this.target, size: this.size, resumable: info.resumable, filename: path.basename(this.target) });
 
@@ -140,7 +143,8 @@ class SegmentedDownload extends EventEmitter {
     await this.fh.close();
     let finalPath = this.target;
     if (fs.existsSync(finalPath)) finalPath = uniquePath(path.dirname(finalPath), path.basename(finalPath));
-    await fsp.rename(this.part, finalPath);
+    await fsp.mkdir(path.dirname(finalPath), { recursive: true });
+    await moveFile(this.part, finalPath);
     await this.clearState();
     this.target = finalPath;
     this.emit('progress', this.progress());
@@ -316,4 +320,14 @@ class SegmentedDownload extends EventEmitter {
   }
 }
 
-module.exports = { SegmentedDownload };
+/** Rename, or copy + delete when the work folder and the save folder are on different drives. */
+async function moveFile(from, to) {
+  try { await fsp.rename(from, to); }
+  catch (e) {
+    if (e.code !== 'EXDEV') throw e;
+    await fsp.copyFile(from, to);
+    await fsp.rm(from, { force: true });
+  }
+}
+
+module.exports = { SegmentedDownload, moveFile };

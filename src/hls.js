@@ -168,7 +168,8 @@ class HlsDownload extends EventEmitter {
       o.target = uniquePath(o.dir, name);
     }
     this.target = o.target;
-    this.work = this.target + '.mdmhls';
+    // pieces wait in the job's work folder (old jobs: next to the file), not in the save folder
+    this.work = o.workDir ? path.join(o.workDir, 'hls') : this.target + '.mdmhls';
     await fsp.mkdir(this.work, { recursive: true });
 
     const tracks = [{ name: 'v', segments: pl.segments }];

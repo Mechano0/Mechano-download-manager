@@ -14,8 +14,8 @@
  * Anything this path can't do (live streams, sites that only offer HLS/DASH pieces, no ffmpeg
  * for a two-part video, a link that refuses us at once) goes to the classic YtdlpDownload.
  *
- * Resume: the parts keep fixed names next to the final file
- * ("<name>.f<format>.<ext>.mdmpart" + its segment table), so a pause, crash or restart continues
+ * Resume: the parts keep fixed names in the job's work folder (data\work\<job id>, or next to the
+ * final file for old jobs: "<name>.f<format>.<ext>.mdmpart" + its segment table), so a pause, crash or restart continues
  * them. The direct links expire after a few hours: every start asks yt-dlp for fresh ones.
  */
 const fs = require('node:fs');
@@ -23,7 +23,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { spawn } = require('node:child_process');
-const { SegmentedDownload } = require('./segmented');
+const { SegmentedDownload, moveFile } = require('./segmented');
 const { YtdlpDownload, resolve } = require('./ytdlp');
 const { HttpError } = require('./http');
 const { uniquePath } = require('./util');
@@ -114,9 +114,11 @@ class MediaDownload extends EventEmitter {
     if (!path.isAbsolute(final)) final = path.join(o.dir, final);
     const audioToMp3 = o.audioOnly && o.ffmpeg && !/^mp3$/i.test(formats[0].ext || '');
     if (audioToMp3) final = final.replace(/\.[^.\\/]+$/, '') + '.mp3';
+    // Picture and sound parts wait in the job's work folder; only the joined file reaches the save folder.
+    const partBase = o.workDir ? path.join(o.workDir, path.basename(final)) : final;
     const parts = formats.map((f) => ({
       f,
-      target: `${final}.f${String(f.format_id).replace(/[^\w.-]/g, '_')}.${f.ext || 'bin'}`,
+      target: `${partBase}.f${String(f.format_id).replace(/[^\w.-]/g, '_')}.${f.ext || 'bin'}`,
       video: !!(f.vcodec && f.vcodec !== 'none'),
     }));
     return { final, parts, merge: formats.length > 1, audioToMp3, title: j.title };
@@ -175,7 +177,8 @@ class MediaDownload extends EventEmitter {
     const files = this.parts.map((p) => p.target);
     let out = plan.final;
     if (fs.existsSync(out)) out = uniquePath(path.dirname(out), path.basename(out));
-    const tmp = out + '.joining' + path.extname(out);
+    const tmp = (o.workDir ? path.join(o.workDir, path.basename(out)) : out) + '.joining' + path.extname(out);
+    if (o.workDir) fs.mkdirSync(o.workDir, { recursive: true });
     if (plan.merge) {
       this.emit('log', 'Joining picture and sound...');
       const v = this.parts.find((p) => p.video) || this.parts[0];
@@ -188,7 +191,7 @@ class MediaDownload extends EventEmitter {
     } else {
       await fsp.rename(files[0], tmp);
     }
-    await fsp.rename(tmp, out);
+    await moveFile(tmp, out);
     for (const f of files) await fsp.rm(f, { force: true });
     const size = fs.statSync(out).size;
     this.emit('done', { file: out, size });
