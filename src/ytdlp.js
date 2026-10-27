@@ -218,6 +218,55 @@ function sortOrder(o) {
   return parts.join(',');
 }
 
+/** Which formats to take: -f, the sort order and the merged container (shared by both download paths). */
+function selectionArgs(o) {
+  const args = ['-f', o.format || defaultFormat(o)];
+  if (!o.format && !o.audioOnly) {
+    // MP4/H.264 plays everywhere (Windows players, PowerPoint, video editors); VP9/AV1 .webm often doesn't.
+    args.push('-S', sortOrder(o));
+    if (o.ffmpeg) args.push('--merge-output-format', 'mp4');
+  }
+  return args;
+}
+
+/** yt-dlp's output name pattern for a single video or a playlist. */
+function outTemplate(o) {
+  return o.outTemplate || (o.playlist
+    ? '%(playlist_title,playlist_id).80B/%(playlist_index)03d - %(title).100B [%(id)s].%(ext)s'
+    : '%(title).120B [%(id)s].%(ext)s');
+}
+
+/**
+ * Run "yt-dlp -J" with the same choices a download would make: the result tells which formats
+ * it picked (requested_formats), their direct links + headers, and the final file name.
+ */
+function resolve(o) {
+  return new Promise((resolveP, reject) => {
+    if (!o.ytdlp) return reject(new Error('yt-dlp was not found. See README: "Install yt-dlp".'));
+    // line 1: the final file name (with the merged extension), line 2: the info as JSON
+    const args = [...baseArgs(o), ...selectionArgs(o), '-P', o.dir, '-o', outTemplate(o),
+      '--print', 'filename', '--print', '%()j', o.url];
+    const p = spawn(o.ytdlp, args, { windowsHide: true });
+    let out = '';
+    let err = '';
+    p.stdout.setEncoding('utf8');
+    p.stderr.setEncoding('utf8');
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (err += d));
+    p.on('error', reject);
+    p.on('close', (code) => {
+      if (code !== 0) return reject(new Error(lastError(err) || `yt-dlp exited with ${code}`));
+      try {
+        const lines = out.split(/\r?\n/).filter((l) => l.trim());
+        const jsonAt = lines.findIndex((l) => l.startsWith('{'));
+        const j = JSON.parse(lines[jsonAt]);
+        if (jsonAt > 0) j.filename = lines[jsonAt - 1].trim();
+        resolveP(j);
+      } catch (e) { reject(e); }
+    });
+  });
+}
+
 class YtdlpDownload extends EventEmitter {
   /**
    * @param {object} o  { url, dir, ytdlp, ffmpeg, format, cookiesFile, referer, userAgent,
@@ -252,11 +301,9 @@ class YtdlpDownload extends EventEmitter {
     }
     const args = [
       ...base,
-      '-f', o.format || defaultFormat(o),
+      ...selectionArgs(o),
       '-P', o.dir,
-      '-o', o.outTemplate || (o.playlist
-        ? '%(playlist_title,playlist_id).80B/%(playlist_index)03d - %(title).100B [%(id)s].%(ext)s'
-        : '%(title).120B [%(id)s].%(ext)s'),
+      '-o', outTemplate(o),
       '-N', String(o.fragments || 4),
       '--newline', '--progress', '--no-simulate',
       '--progress-template', 'download:MDM|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s',
@@ -266,11 +313,6 @@ class YtdlpDownload extends EventEmitter {
       '--print', 'after_move:MDMFILE|%(filepath)s',
     ];
     if (o.audioOnly && o.ffmpeg) args.push('-x', '--audio-format', 'mp3');
-    if (!o.format && !o.audioOnly) {
-      // MP4/H.264 plays everywhere (Windows players, PowerPoint, video editors); VP9/AV1 .webm often doesn't.
-      args.push('-S', sortOrder(o));
-      if (o.ffmpeg) args.push('--merge-output-format', 'mp4');
-    }
     if (o.rateLimit) args.push('-r', String(Math.round(o.rateLimit)));
     args.push(o.url);
 
@@ -358,5 +400,5 @@ class YtdlpDownload extends EventEmitter {
 
 module.exports = {
   YtdlpDownload, info, playlistInfo, isPlaylistUrl, findTool, resetToolCache, resetRuntimeCache,
-  writeCookiesFile, defaultFormat, toolVersion,
+  writeCookiesFile, defaultFormat, toolVersion, resolve, selectionArgs, cleanTitle,
 };

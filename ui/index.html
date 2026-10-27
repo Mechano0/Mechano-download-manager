@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-lang="__MDM_LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,6 +9,7 @@
   // Apply the saved theme before the page paints (no white flash in dark mode).
   try { const t = localStorage.getItem('mdm.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
 </script>
+<script src="/i18n.js"></script>
 <style>
   /* ------------------------------------------------------------------ theme tokens
      Light is the default; dark comes from Windows (Auto) or the 🌓 button (data-theme). */
@@ -213,11 +214,23 @@
   .action-banner { position: sticky; top: 55px; z-index: 3; display: none; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
     background: #b42318; color: #fff; padding: 10px 20px; font-weight: 600; }
   .action-banner.show { display: flex; }
+  /* Site Grabber */
+  .grab-form { display: flex; gap: 8px; flex-wrap: wrap; }
+  .grab-form #grabUrl { flex: 1 1 320px; }
+  .grab-types { display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: center; margin: 10px 0 4px; }
+  .grab-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 10px 0 6px; }
+  #grabResult .pl-scroll { border: 1px solid var(--line); border-radius: 8px; }
+  /* "New version of Mechano DM" bar */
+  .app-update { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 20px; background: var(--accent-soft); border-bottom: 1px solid var(--line); font-size: 13px; }
+  .app-update[hidden] { display: none; }
+  .app-update .spacer { flex: 1; }
+  .app-update a { color: var(--accent); }
   .action-banner button { background: #fff; color: #b42318; border-color: #fff; font-weight: 700; }
 
   /* ------------------------------------------------------------------ "New download" confirmation popup */
-  dialog.confirm { width: min(560px, calc(100vw - 32px)); border: 1px solid var(--line); border-radius: 14px; padding: 0;
+  dialog.confirm { width: min(660px, calc(100vw - 32px)); border: 1px solid var(--line); border-radius: 14px; padding: 0; overflow: hidden;
     background: var(--panel); color: var(--text); box-shadow: var(--pop); }
+  dialog.confirm iframe { display: block; width: 100%; height: min(470px, calc(100vh - 60px)); border: 0; background: var(--panel); }
   dialog.confirm::backdrop { background: rgba(10, 16, 24, .45); }
   .cf-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
   .cf-head img { width: 26px; height: 26px; }
@@ -370,6 +383,9 @@
     <button class="upd-btn" id="updBtn" title="Update yt-dlp now (YouTube / Facebook fixes)" aria-label="Update yt-dlp now">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
     </button>
+    <button class="gear-btn" id="grabBtn" title="Site Grabber" aria-label="Site Grabber" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/><path d="M16 16l4 4"/></svg>
+    </button>
     <button class="gear-btn" id="schedBtn" title="Scheduler" aria-label="Scheduler" aria-expanded="false">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5"/><path d="M5 3L2 6"/><path d="M22 6l-3-3"/></svg>
     </button>
@@ -385,44 +401,48 @@
 </header>
 <div class="toast" id="toast"></div>
 <div class="app-frame" aria-hidden="true"></div>
-<dialog class="confirm" id="confirmDlg" aria-labelledby="cfTitle">
-  <div class="cf-head">
-    <img src="/logo.png?v=2" alt="">
-    <h2 id="cfTitle">New download</h2>
-    <span class="count" id="cfCount"></span>
-  </div>
-  <div class="cf-body">
-    <div>
-      <div class="cf-name" id="cfName">…</div>
-      <div class="cf-sub"><span class="badge" id="cfKind"></span><span id="cfSize"></span></div>
-      <div class="cf-url" id="cfUrl"></div>
-    </div>
-    <div class="cf-folder" id="cfQualityRow" hidden>
-      <label for="cfQuality">Quality</label>
-      <select id="cfQuality"></select>
-    </div>
-    <div class="cf-folder">
-      <label for="cfFolder">Save to</label>
-      <div class="row">
-        <input type="text" id="cfFolder" spellcheck="false">
-        <button type="button" id="cfBrowse">Browse…</button>
-      </div>
-    </div>
-    <div class="cf-note" id="cfNote" hidden></div>
-  </div>
-  <div class="cf-foot">
-    <label><input type="checkbox" id="cfDontAsk"> Don't ask again</label>
-    <span class="spacer"></span>
-    <button type="button" id="cfCancel">Cancel</button>
-    <button type="button" id="cfLater">⏰ Later</button>
-    <button type="button" class="primary" id="cfStart">Start download</button>
-  </div>
+<dialog class="confirm" id="confirmDlg" aria-label="Download File Info">
+  <!-- the same "Download File Info" page the app shows in its own window (ui/dialog.html) -->
+  <iframe id="cfFrame" title="Download File Info"></iframe>
 </dialog>
+<div class="app-update" id="appUpdate" role="status" hidden>
+  <span id="appUpdateText"></span>
+  <span class="spacer"></span>
+  <a id="appUpdatePage" href="#" target="_blank" rel="noopener" hidden>Releases page</a>
+  <button type="button" class="primary small" id="appUpdateInstall">Install update</button>
+  <button type="button" class="small" id="appUpdateLater">Later</button>
+</div>
 <div class="action-banner" id="actionBanner" role="alert">
   <span id="actionText"></span>
   <button type="button" id="actionCancel">Cancel</button>
 </div>
 <main>
+  <section class="card settings-card" id="grabCard" hidden>
+    <div class="settings-head">
+      <h2>Site Grabber</h2>
+      <button class="small" type="button" id="grabClose" aria-label="Close Site Grabber">✕</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin:6px 0 10px">Lists the files linked from a web page (and its pages on the same site). Tick what you want and press Download selected.</p>
+    <form id="grabForm" class="grab-form">
+      <input type="url" id="grabUrl" placeholder="https://example.com/downloads/" required>
+      <select id="grabDepth" title="How deep to look">
+        <option value="0">This page only</option>
+        <option value="1" selected>+ pages it links to</option>
+        <option value="2">2 levels deep</option>
+      </select>
+      <button class="primary" type="submit" id="grabGo">Find files</button>
+    </form>
+    <div class="grab-types" id="grabTypes">
+      <label class="inline"><input type="checkbox" value="Compressed" checked> Compressed</label>
+      <label class="inline"><input type="checkbox" value="Video" checked> Video</label>
+      <label class="inline"><input type="checkbox" value="Music" checked> Music</label>
+      <label class="inline"><input type="checkbox" value="Documents" checked> Documents</label>
+      <label class="inline"><input type="checkbox" value="Programs" checked> Programs</label>
+      <label class="inline"><input type="checkbox" value="Images"> Images</label>
+      <input type="text" id="grabCustom" placeholder="More extensions: .iso .dwg" style="width:180px">
+    </div>
+    <div id="grabResult"></div>
+  </section>
   <section class="card settings-card" id="schedCard" hidden>
     <div class="settings-head">
       <h2>Scheduler</h2>
@@ -514,6 +534,14 @@
         <label style="align-content:end"><span><input type="checkbox" name="useCategories"> Sort into category folders (Video, Music, Compressed...)</span></label>
         <label style="align-content:end"><span><input type="checkbox" name="confirmDownloads"> Ask before every download (shows where it will be saved)</span></label>
         <label style="align-content:end"><span><input type="checkbox" name="showCompleteDialog"> Show a "Download complete" window with Open / Show in folder</span></label>
+        <label>Language
+          <select name="language"><option value="auto">Auto (Windows)</option><option value="en">English</option><option value="ar">العربية</option></select>
+        </label>
+        <label>App updates
+          <select name="appUpdate"><option value="notify">Tell me (recommended)</option><option value="auto">Install automatically</option><option value="off">Off</option></select>
+        </label>
+        <label style="align-content:end"><span><input type="checkbox" name="clipboardMonitor"> Watch the clipboard for download links</span></label>
+        <label style="align-content:end"><span><input type="checkbox" name="fastVideo"> Fast video downloads (multi-connection for YouTube and others)</span></label>
         <div><button class="primary" type="submit">Save settings</button></div>
       </form>
       <p class="muted" style="font-size:12px">Browser extension token (only needed if automatic pairing fails): <code id="tok"></code></p>
@@ -560,6 +588,7 @@
 <script>
 const TOKEN = '__MDM_TOKEN__';
 const $ = (s) => document.querySelector(s);
+const T = (s) => (window.MDM_I18N ? MDM_I18N.t(s) : s); // Arabic when chosen (ui/i18n.js)
 const jobs = new Map();
 let filter = 'all';
 let chosenFormat = null;
@@ -659,6 +688,50 @@ function setSchedOpen(open) {
   if (open) window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 $('#schedBtn').addEventListener('click', () => setSchedOpen($('#schedCard').hidden));
+
+// ---------------------------------------------------------------- Site Grabber
+function setGrabOpen(open) {
+  $('#grabCard').hidden = !open;
+  $('#grabBtn').classList.toggle('on', open);
+  $('#grabBtn').setAttribute('aria-expanded', String(open));
+  if (open) { window.scrollTo({ top: 0, behavior: 'smooth' }); $('#grabUrl').focus(); }
+}
+$('#grabBtn').addEventListener('click', () => setGrabOpen($('#grabCard').hidden));
+$('#grabClose').addEventListener('click', () => setGrabOpen(false));
+let grabFiles = [];
+$('#grabForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const categories = [...$('#grabTypes').querySelectorAll('input[type=checkbox]:checked')].map((c) => c.value);
+  $('#grabGo').disabled = true;
+  $('#grabResult').innerHTML = `<p class="muted">${esc(T('Looking for files…'))}</p>`;
+  try {
+    const r = await api('/api/grab', { url: $('#grabUrl').value.trim(), depth: Number($('#grabDepth').value), categories, custom: $('#grabCustom').value });
+    grabFiles = r.files;
+    if (!r.files.length) { $('#grabResult').innerHTML = `<p class="muted">${esc(T(`No files found on ${r.pages} page(s).`))}</p>`; return; }
+    $('#grabResult').innerHTML = `
+      <div class="grab-head"><label class="inline"><input type="checkbox" id="grabAll" checked> <span>${esc(T(`${r.files.length} files on ${r.pages} page(s)`))}</span></label>
+        <button type="button" class="primary small" id="grabDl">Download selected</button></div>
+      <div class="pl-scroll"><table class="pl-table"><tbody>${r.files.map((f, i) => `<tr>
+        <td class="n"><input type="checkbox" data-gi="${i}" checked></td>
+        <td class="t" title="${esc(f.url)}">${esc(f.name)}</td><td>${esc(T(f.category))}</td><td class="muted">.${esc(f.ext)}</td></tr>`).join('')}</tbody></table></div>`;
+  } catch (err) { $('#grabResult').innerHTML = ''; showToast(err.message, true); }
+  finally { $('#grabGo').disabled = false; }
+});
+$('#grabResult').addEventListener('change', (e) => {
+  if (e.target.id === 'grabAll') $('#grabResult').querySelectorAll('[data-gi]').forEach((c) => (c.checked = e.target.checked));
+});
+$('#grabResult').addEventListener('click', async (e) => {
+  if (e.target.id !== 'grabDl') return;
+  const pick = [...$('#grabResult').querySelectorAll('[data-gi]:checked')].map((c) => grabFiles[Number(c.dataset.gi)]);
+  if (!pick.length) return;
+  e.target.disabled = true;
+  try {
+    // one approval for the whole list: no "Download File Info" window per file
+    await api('/api/jobs', pick.map((f) => ({ url: f.url, source: 'grabber', confirmed: true, referrer: $('#grabUrl').value.trim() })));
+    showToast(T(`Added ${pick.length} downloads`));
+    setGrabOpen(false);
+  } catch (err) { showToast(err.message, true); e.target.disabled = false; }
+});
 $('#schedClose').addEventListener('click', () => setSchedOpen(false));
 
 let schedFormFilled = false;
@@ -839,8 +912,6 @@ $('#qConcurrent').addEventListener('change', async () => {
 
 // ---------------------------------------------------------------- "New download" confirmation popup
 let cfJob = null;       // job shown in the popup
-let cfBusy = false;
-const KIND_LABEL = { direct: 'File', hls: 'Stream', ytdlp: 'Video site' };
 
 function confirmQueue() {
   return [...jobs.values()].filter((j) => j.status === 'confirm').sort((a, b) => a.createdAt - b.createdAt);
@@ -855,7 +926,6 @@ async function nativeHost() {
   return hostCheck.native;
 }
 
-let cfFolders = null, cfAutoFolder = '';
 async function checkConfirm() {
   const dlg = $('#confirmDlg');
   const q = confirmQueue();
@@ -863,93 +933,23 @@ async function checkConfirm() {
   if (cfJob && !q.some((j) => j.id === cfJob.id)) { cfJob = null; if (dlg.open) dlg.close(); } // handled elsewhere
   if (cfJob || !q.length) return;
   cfJob = q[0];
-  const j = cfJob;
-  $('#cfCount').textContent = q.length > 1 ? `1 of ${q.length}` : '';
-  $('#cfName').textContent = j.filename || 'Getting details…';
-  $('#cfKind').textContent = j.playlist ? 'Playlist' : KIND_LABEL[j.kind] || j.kind;
-  $('#cfSize').textContent = '';
-  $('#cfUrl').textContent = j.url;
-  $('#cfUrl').title = j.url;
-  $('#cfFolder').value = '';
-  $('#cfFolder').placeholder = 'Working out the folder…';
-  $('#cfNote').hidden = true;
-  $('#cfDontAsk').checked = false;
-  setCfBusy(false);
+  $('#cfFrame').src = `/dialog.html?id=${encodeURIComponent(cfJob.id)}`;
   if (!dlg.open) dlg.showModal();
-  $('#cfStart').focus();
-  try {
-    const d = await api(`/api/jobs/${j.id}/details`, {});
-    if (cfJob !== j) return;
-    $('#cfName').textContent = d.name;
-    $('#cfSize').textContent = d.size ? fmtBytes(d.size) : '';
-    if (!$('#cfFolder').value) $('#cfFolder').value = d.folder;
-    cfFolders = d.folders || null;
-    cfAutoFolder = d.folder;
-    const sel = $('#cfQuality');
-    sel.innerHTML = '';
-    for (const o of d.qualities || []) {
-      const opt = document.createElement('option');
-      opt.value = o.value;
-      opt.textContent = o.label + (o.size ? `  (${fmtBytes(o.size)})` : '');
-      if (o.value === d.selected) opt.selected = true;
-      sel.appendChild(opt);
-    }
-    $('#cfQualityRow').hidden = !(d.qualities && d.qualities.length);
-    if (d.note) { $('#cfNote').textContent = d.note; $('#cfNote').hidden = false; }
-  } catch (err) {
-    if (cfJob !== j) return;
-    $('#cfNote').textContent = err.message; $('#cfNote').hidden = false;
-  }
+  $('#cfFrame').focus();
 }
 
-function setCfBusy(b) {
-  cfBusy = b;
-  for (const id of ['#cfStart', '#cfLater', '#cfCancel', '#cfBrowse']) $(id).disabled = b;
-}
-
-async function cfFinish(action) {
-  if (!cfJob || cfBusy) return;
-  const j = cfJob;
-  setCfBusy(true);
-  try {
-    if ($('#cfDontAsk').checked) await api('/api/config', { confirmDownloads: false });
-    if (action === 'cancel') await api(`/api/jobs/${j.id}/remove`, { deleteFiles: false });
-    else await api(`/api/jobs/${j.id}/confirm`, {
-      dir: $('#cfFolder').value.trim() || undefined, later: action === 'later',
-      quality: $('#cfQualityRow').hidden ? undefined : $('#cfQuality').value,
-    });
-    if ($('#cfDontAsk').checked) showToast('Downloads now start without asking. Turn it back on in ⚙ Settings.');
-    else if (action === 'later') showToast('Added to the scheduler (⏰)');
+// The dialog page says when it is finished (started, scheduled or cancelled).
+window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin || !e.data || e.data.mdm !== 'dialog') return;
+  if (e.data.type === 'done') {
     cfJob = null;
     $('#confirmDlg').close();
+    $('#cfFrame').src = 'about:blank';
     setTimeout(checkConfirm, 50); // next one, if several arrived together
-  } catch (err) {
-    setCfBusy(false);
-    $('#cfNote').textContent = err.message; $('#cfNote').hidden = false;
   }
-}
-
-// Audio goes to Music and video to Video, unless you typed your own folder.
-$('#cfQuality').addEventListener('change', () => {
-  if (!cfFolders) return;
-  const f = $('#cfFolder').value;
-  if (f !== cfFolders.video && f !== cfFolders.audio && f !== cfAutoFolder) return;
-  $('#cfFolder').value = cfAutoFolder = $('#cfQuality').value === 'audio' ? cfFolders.audio : cfFolders.video;
 });
-$('#cfStart').addEventListener('click', () => cfFinish('start'));
-$('#cfLater').addEventListener('click', () => cfFinish('later'));
-$('#cfCancel').addEventListener('click', () => cfFinish('cancel'));
-$('#confirmDlg').addEventListener('cancel', (e) => { e.preventDefault(); cfFinish('cancel'); }); // Esc = Cancel
-$('#cfFolder').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); cfFinish('start'); } });
-$('#cfBrowse').addEventListener('click', async () => {
-  setCfBusy(true);
-  try {
-    const r = await api('/api/pick-folder', { start: $('#cfFolder').value.trim() });
-    if (r.path) $('#cfFolder').value = r.path;
-  } catch (err) { showToast(err.message, true); }
-  setCfBusy(false);
-  $('#cfFolder').focus();
-});
+// Esc while the focus is outside the frame: keep the dialog (the page inside handles Esc = Cancel)
+$('#confirmDlg').addEventListener('cancel', (e) => { e.preventDefault(); $('#cfFrame').focus(); });
 
 // Download method (Settings): remembered; a note in the link area shows when it is not Auto.
 function applyKind(v) {
@@ -1097,6 +1097,14 @@ function playlistHtml(j) {
     <div class="pl-scroll"><table class="pl-table"><thead><tr><th>#</th><th></th><th>Video</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
+// "Play while downloading": videos and music that are downloading (or paused part-way)
+const MEDIA_EXT = /\.(mp4|m4v|mkv|webm|mov|avi|wmv|flv|ts|mpg|mpeg|3gp|mp3|m4a|aac|wav|flac|ogg|opus|wma)$/i;
+function canPlay(j) {
+  if (j.playlist || j.kind === 'hls' || j.kind === 'torrent') return false;
+  if (!['downloading', 'paused'].includes(j.status) || !(j.downloaded > 0)) return false;
+  return j.kind === 'ytdlp' || MEDIA_EXT.test(j.filename || j.target || '');
+}
+
 function jobHtml(j, opts = {}) {
   const pct = '';
   let status = j.status === 'queued' && j.startAt ? `scheduled ${new Date(j.startAt).toLocaleString()}` : j.status;
@@ -1112,6 +1120,7 @@ function jobHtml(j, opts = {}) {
   if (['paused', 'error'].includes(j.status)) btns.push(`<button class="small" data-act="resume">${j.status === 'error' ? 'Retry' : 'Resume'}</button>`);
   if (j.status === 'scheduled') btns.push(`<button class="small" data-act="resume" title="Download now instead of waiting">Start now</button>`);
   if (['queued', 'paused', 'error'].includes(j.status)) btns.push(`<button class="small" data-act="later" title="Move to the scheduler">⏰ Later</button>`);
+  if (canPlay(j)) btns.push(`<button class="small" data-act="play" title="Play what is downloaded so far">▶ Play</button>`);
   if (j.file || j.target) btns.push(`<button class="small" data-act="reveal">Folder</button>`);
   if (j.playlist) btns.unshift(`<button class="small" data-act="videos" title="Show the videos of this playlist">Videos${j.entries ? ' (' + j.entries.length + ')' : ''} ${opts.videos ? '▴' : '▾'}</button>`);
   btns.push(`<button class="small" data-act="log">Log</button>`, `<button class="small" data-act="remove">✕</button>`);
@@ -1233,6 +1242,7 @@ $('#clearDone').addEventListener('click', () => jobs.forEach((j) => j.status ===
 
 async function loadConfig() {
   const c = await api('/api/config');
+  window.cfgLanguage = c.language || 'auto';
   const f = $('#cfgForm');
   for (const el of f.elements) if (el.name) el.type === 'checkbox' ? (el.checked = !!c[el.name]) : (el.value = c[el.name] ?? '');
   $('#conns').value = c.connections;
@@ -1246,13 +1256,44 @@ $('#cfgForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target, body = {};
   for (const el of f.elements) if (el.name) body[el.name] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
-  try { await api('/api/config', body); await loadConfig(); renderUpdate(await api('/api/update')); showToast('Settings saved'); } catch (err) { alert(err.message); }
+  const langChanged = MDM_I18N && body.language && body.language !== (window.cfgLanguage || 'auto');
+  try {
+    await api('/api/config', body);
+    if (langChanged) { location.reload(); return; } // the page is built in the new language
+    await loadConfig(); renderUpdate(await api('/api/update')); showToast('Settings saved');
+  } catch (err) { alert(err.message); }
 });
 
 // ---------------------------------------------------------------- yt-dlp updates (⟳ button)
 const ago = (t) => { const d = Math.floor((Date.now() - t) / 86400000); return d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`; };
 const inDays = (t) => { const d = Math.ceil((t - Date.now()) / 86400000); return d <= 0 ? 'soon' : d === 1 ? 'tomorrow' : `in ${d} days`; };
 let lastResultAt = null;
+// ---------------------------------------------------------------- Mechano DM updates (signed releases)
+function renderAppUpdate(s) {
+  const bar = $('#appUpdate');
+  let dismissed = null;
+  try { dismissed = localStorage.getItem('mdm.skipVersion'); } catch {}
+  const show = s.available && s.mode !== 'off' && (dismissed !== s.latest || s.downloading || s.installing);
+  bar.hidden = !show;
+  if (!show) return;
+  let text = `New version available: Mechano DM ${s.latest} (you have ${s.current})`;
+  if (s.downloading) text = `Downloading Mechano DM ${s.latest}… ${Math.round((s.progress || 0) * 100)}%`;
+  else if (s.installing) text = `Installing Mechano DM ${s.latest}. The app restarts by itself.`;
+  else if (s.error) text += ` · ${s.error}`;
+  $('#appUpdateText').textContent = text;
+  $('#appUpdateText').title = s.notes || '';
+  $('#appUpdateInstall').hidden = !s.installed || s.downloading || s.installing;
+  $('#appUpdatePage').hidden = s.installed;
+  $('#appUpdatePage').href = s.page;
+}
+$('#appUpdateInstall').addEventListener('click', async () => {
+  try { renderAppUpdate(await api('/api/app-update/install', {})); } catch (err) { showToast(err.message, true); }
+});
+$('#appUpdateLater').addEventListener('click', async () => {
+  try { const s = await api('/api/app-update'); localStorage.setItem('mdm.skipVersion', s.latest); } catch {}
+  $('#appUpdate').hidden = true;
+});
+
 function showToast(msg, bad) {
   const t = $('#toast');
   t.textContent = msg;
@@ -1288,6 +1329,7 @@ $('#updBtn').addEventListener('click', async () => {
 function connect() {
   const es = new EventSource(`/api/events?token=${TOKEN}`);
   es.addEventListener('update', (e) => renderUpdate(JSON.parse(e.data)));
+  es.addEventListener('appupdate', (e) => renderAppUpdate(JSON.parse(e.data)));
   es.addEventListener('schedule', (e) => renderSchedule(JSON.parse(e.data)));
   es.addEventListener('snapshot', (e) => { jobs.clear(); for (const j of JSON.parse(e.data)) jobs.set(j.id, j); render(); });
   es.addEventListener('job', (e) => { const j = JSON.parse(e.data); jobs.set(j.id, j); schedule(); });

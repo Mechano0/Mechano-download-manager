@@ -21,7 +21,18 @@ async function send(url, kind, tab, btn) {
   $('#open').href = `http://127.0.0.1:${s.port}/`;
   $('#open').addEventListener('click', (e) => { e.preventDefault(); chrome.tabs.create({ url: `http://127.0.0.1:${s.port}/` }); });
 
-  if (!s.alive) $('#hint').textContent = 'Start it with: node bin/mdm.js serve';
+  if (!s.alive) $('#hint').textContent = 'Start Mechano DM (Start menu or desktop icon).';
+  // Firefox asks for "all sites" access separately: offer the button when it is missing
+  try {
+    const all = await chrome.permissions.contains({ origins: ['<all_urls>'] });
+    if (!all) {
+      const b = document.createElement('button');
+      b.className = 'primary';
+      b.textContent = 'Allow Mechano DM on all sites (needed)';
+      b.onclick = async () => { if (await chrome.permissions.request({ origins: ['<all_urls>'] })) { b.textContent = 'Allowed ✓'; b.disabled = true; } };
+      $('#page').appendChild(b);
+    }
+  } catch { /* Chrome: granted at install */ }
   if (s.mediaSite || (s.media.length === 0 && /^https?:/.test(tab.url))) {
     const b = document.createElement('button');
     b.className = 'primary';

@@ -1,4 +1,4 @@
-// Mechano DM.exe: the Windows program.
+﻿// Mechano DM.exe: the Windows program.
 //
 //  - runs the download engine (Node.js, hidden) as a child process and stops it on exit
 //    (a Windows "job object" makes sure it never keeps running on its own)
@@ -107,6 +107,10 @@ static class Program
         }
         catch { }
     }
+
+    /** Interface language for the tray and the small windows (Settings → Language). */
+    public static bool Arabic = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ar";
+    public static string L(string en, string ar) { return Arabic ? ar : en; }
 
     public static string FormatBytes(double n)
     {
@@ -217,6 +221,13 @@ class Host : ApplicationContext
     readonly NotifyIcon tray = new NotifyIcon();
     readonly ToolStripMenuItem miCancel = new ToolStripMenuItem("Cancel the pending shut down / sleep");
     readonly ToolStripMenuItem miStartup = new ToolStripMenuItem("Start with Windows");
+    readonly ToolStripMenuItem miClipboard = new ToolStripMenuItem("Watch copied links");
+    readonly ToolStripMenuItem miOpen = new ToolStripMenuItem("Open Mechano DM");
+    readonly ToolStripMenuItem miFolder = new ToolStripMenuItem("Open downloads folder");
+    readonly ToolStripMenuItem miExit = new ToolStripMenuItem("Exit");
+    ClipboardWatcher clip;
+    bool clipboardOn = true;
+    string language = "auto";
     readonly System.Windows.Forms.Timer poll = new System.Windows.Forms.Timer();
     readonly Dictionary<string, string> lastStatus = new Dictionary<string, string>();
     readonly Queue<string> confirmQueue = new Queue<string>();
@@ -224,7 +235,7 @@ class Host : ApplicationContext
     Process engine;
     IntPtr killJob = IntPtr.Zero;
     MainForm main;
-    ConfirmForm confirm;
+    IConfirmWindow confirm;
     bool exiting, first = true, pollBusy, toldAboutTray;
     int ticks, restarts, pollFailures;
     bool showComplete = true;
@@ -240,19 +251,33 @@ class Host : ApplicationContext
         tray.Text = "Mechano DM - starting";
         tray.Visible = true;
         var menu = new ContextMenuStrip();
-        var open = new ToolStripMenuItem("Open Mechano DM", null, delegate { ShowMain(); });
-        open.Font = new Font(open.Font, FontStyle.Bold);
-        menu.Items.Add(open);
-        menu.Items.Add(new ToolStripMenuItem("Open downloads folder", null, delegate { OpenDownloads(); }));
+        miOpen.Click += delegate { ShowMain(); };
+        miOpen.Font = new Font(miOpen.Font, FontStyle.Bold);
+        menu.Items.Add(miOpen);
+        miFolder.Click += delegate { OpenDownloads(); };
+        menu.Items.Add(miFolder);
         miStartup.Checked = File.Exists(StartupLink);
         miStartup.Click += delegate { ToggleStartup(); };
         menu.Items.Add(miStartup);
+        miClipboard.Checked = true;
+        miClipboard.Click += delegate
+        {
+            bool on = !miClipboard.Checked;
+            miClipboard.Checked = clipboardOn = on;
+            Task.Run(() => Try(() => api.Post("/api/config", "{\"clipboardMonitor\":" + (on ? "true" : "false") + "}")));
+        };
+        menu.Items.Add(miClipboard);
         miCancel.Visible = false;
-        miCancel.Click += delegate { Try(() => api.Post("/api/schedule/cancel-action", "{}")); tray.ShowBalloonTip(3000, "Cancelled", "The computer will stay on.", ToolTipIcon.Info); };
+        miCancel.Click += delegate { Try(() => api.Post("/api/schedule/cancel-action", "{}")); tray.ShowBalloonTip(3000, Program.L("Cancelled", "تم الإلغاء"), Program.L("The computer will stay on.", "الكمبيوتر هيفضل شغال."), ToolTipIcon.Info); };
         menu.Items.Add(miCancel);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Exit", null, delegate { Exit(); }));
+        miExit.Click += delegate { Exit(); };
+        menu.Items.Add(miExit);
         tray.ContextMenuStrip = menu;
+        ApplyLanguage();
+
+        // Copied links → "Download File Info" (like IDM's clipboard monitoring)
+        clip = new ClipboardWatcher(OnClipboard);
         tray.DoubleClick += delegate { ShowMain(); };
 
         // A second start of Mechano DM.exe only asks this one to show its window.
@@ -366,7 +391,17 @@ class Host : ApplicationContext
             {
                 jobs = api.Get("/api/jobs");
                 if (tick % 2 == 0) { api.Post("/api/host", "{}"); sched = api.Get("/api/schedule"); }
-                if (tick % 5 == 1) { var c = api.Get("/api/config") as Dictionary<string, object>; if (c != null && c.ContainsKey("showCompleteDialog")) showComplete = Convert.ToBoolean(c["showCompleteDialog"]); }
+                if (tick % 5 == 1)
+                {
+                    var c = api.Get("/api/config") as Dictionary<string, object>;
+                    if (c != null && c.ContainsKey("showCompleteDialog")) showComplete = Convert.ToBoolean(c["showCompleteDialog"]);
+                    if (c != null && c.ContainsKey("clipboardMonitor")) clipboardOn = Convert.ToBoolean(c["clipboardMonitor"]);
+                    var up = api.Get("/api/app-update") as Dictionary<string, object>;
+                    string launch = Api.Str(up, "launch");
+                    if (!string.IsNullOrEmpty(launch) && !updateStarted) invoker.BeginInvoke((Action)(() => RunAppUpdate(launch)));
+                    string lang = Api.Str(c, "language");
+                    if (lang != null && lang != language) { language = lang; invoker.BeginInvoke((Action)ApplyLanguage); }
+                }
             }
             catch (Exception ex)
             {
@@ -399,7 +434,7 @@ class Host : ApplicationContext
                 if (status == "confirm" && prev != "confirm" && !confirmQueue.Contains(id)) confirmQueue.Enqueue(id);
                 if (!first && known && prev != "done" && status == "done" && showComplete) ShowComplete(j);
                 if (!first && known && prev != "error" && status == "error")
-                    tray.ShowBalloonTip(6000, "Download failed", (Api.Str(j, "filename") ?? Api.Str(j, "url")) + "\n" + Api.Str(j, "error"), ToolTipIcon.Error);
+                    tray.ShowBalloonTip(6000, Program.L("Download failed", "التحميل فشل"), (Api.Str(j, "filename") ?? Api.Str(j, "url")) + "\n" + Api.Str(j, "error"), ToolTipIcon.Error);
                 if (status == "downloading") active++;
                 lastStatus[id] = status;
             }
@@ -411,8 +446,9 @@ class Host : ApplicationContext
                 if (!lastStatus.TryGetValue(confirm.JobId, out cs) || cs != "confirm") { confirm.Silent = true; confirm.Close(); }
                 else if (!jobs.Any(o => Api.Str(o as Dictionary<string, object>, "id") == confirm.JobId)) { confirm.Silent = true; confirm.Close(); }
             }
-            string tip = active > 0 ? "Mechano DM - " + active + " downloading" : Program.Title;
+            string tip = active > 0 ? "Mechano DM - " + active + Program.L(" downloading", " بيتحمّل") : Program.Title;
             if (tray.Text != tip) tray.Text = tip;
+            if (miClipboard.Checked != clipboardOn) miClipboard.Checked = clipboardOn;
             NextConfirm();
         }
         if (sched != null)
@@ -433,6 +469,53 @@ class Host : ApplicationContext
         }
     }
 
+    // ------------------------------------------------------------------ app update
+    bool updateStarted;
+
+    /** The engine downloaded and checked a signed Setup.exe: run it (it closes this app and starts the new one). */
+    void RunAppUpdate(string setup)
+    {
+        if (updateStarted) return;
+        string updates = Path.GetFullPath(Path.Combine(Program.Dir, @"data\update")) + "\\";
+        string full = Path.GetFullPath(setup);
+        if (!full.StartsWith(updates, StringComparison.OrdinalIgnoreCase) || !File.Exists(full)) { Program.Log("app update: unexpected installer path " + setup); return; }
+        if (!File.Exists(Path.Combine(Program.Dir, "install-files.txt"))) return; // portable copy
+        updateStarted = true;
+        Program.Log("app update: running " + full);
+        tray.ShowBalloonTip(5000, Program.L("Updating Mechano DM", "بيتم تحديث Mechano DM"), Program.L("The app restarts in a few seconds. Downloads continue after it.", "البرنامج هيقفل ويفتح تاني خلال ثواني، والتحميلات هتكمل بعدها."), ToolTipIcon.Info);
+        string desktopLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Mechano Download Manager.lnk");
+        string args = "/silent \"/dir=" + Program.Dir.TrimEnd('\\') + "\"" + (File.Exists(desktopLink) ? "" : " /nodesktop");
+        try { Process.Start(new ProcessStartInfo(full, args) { UseShellExecute = false, WorkingDirectory = Path.GetTempPath() }); }
+        catch (Exception ex) { updateStarted = false; Program.Log("app update failed to start: " + ex.Message); }
+    }
+
+    // ------------------------------------------------------------------ language + clipboard
+    void ApplyLanguage()
+    {
+        Program.Arabic = language == "ar" || (language == "auto" && System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ar");
+        miOpen.Text = Program.L("Open Mechano DM", "افتح Mechano DM");
+        miFolder.Text = Program.L("Open downloads folder", "افتح فولدر التحميلات");
+        miStartup.Text = Program.L("Start with Windows", "يشتغل مع ويندوز");
+        miClipboard.Text = Program.L("Watch copied links", "راقب الروابط المنسوخة");
+        miExit.Text = Program.L("Exit", "خروج");
+        tray.ContextMenuStrip.RightToLeft = Program.Arabic ? RightToLeft.Yes : RightToLeft.No;
+    }
+
+    void OnClipboard()
+    {
+        if (!clipboardOn || !poll.Enabled) return;
+        string text = null;
+        try { if (Clipboard.ContainsText()) text = Clipboard.GetText(); } catch { return; } // another app holds the clipboard
+        if (string.IsNullOrEmpty(text)) return;
+        text = text.Trim();
+        // only something that looks like one link; the engine decides if it is a download
+        if (text.Length > 4000 || text.IndexOfAny(new[] { ' ', '\n', '\r', '\t' }) >= 0) return;
+        if (!(text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || text.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+              text.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase))) return;
+        string body = "{\"text\":" + Api.Q(text) + "}";
+        Task.Run(() => Try(() => api.Post("/api/clipboard", body)));
+    }
+
     // ------------------------------------------------------------------ popups
     void NextConfirm()
     {
@@ -440,11 +523,24 @@ class Host : ApplicationContext
         string id = confirmQueue.Dequeue();
         string st;
         if (!lastStatus.TryGetValue(id, out st) || st != "confirm") { NextConfirm(); return; }
-        Program.Log("showing New download window for " + id);
-        confirm = new ConfirmForm(api, id, confirmQueue.Count);
-        confirm.FormClosed += delegate { confirm = null; invoker.BeginInvoke((Action)NextConfirm); };
-        confirm.Show();
-        confirm.BringToTop();
+        Program.Log("showing Download File Info window for " + id);
+        ShowConfirm(id, !WebConfirmForm.Broken);
+    }
+
+    void ShowConfirm(string id, bool web)
+    {
+        PopupForm f = web ? (PopupForm)new WebConfirmForm(api, id) : new ConfirmForm(api, id, confirmQueue.Count);
+        confirm = (IConfirmWindow)f;
+        f.FormClosed += delegate
+        {
+            bool failed = ((IConfirmWindow)f).Failed;
+            confirm = null;
+            // WebView2 could not start: show the same download in the simple window
+            if (failed) invoker.BeginInvoke((Action)(() => ShowConfirm(id, false)));
+            else invoker.BeginInvoke((Action)NextConfirm);
+        };
+        f.Show();
+        f.BringToTop();
     }
 
     void ShowComplete(Dictionary<string, object> j)
@@ -472,7 +568,7 @@ class Host : ApplicationContext
                 if (exiting || e.CloseReason == CloseReason.WindowsShutDown) return;
                 e.Cancel = true; // closing the window keeps downloads running in the tray, like IDM
                 main.Hide();
-                if (!toldAboutTray) { toldAboutTray = true; tray.ShowBalloonTip(4000, "Mechano DM is still running", "Downloads continue here. Double-click this icon to open the window; right-click → Exit to quit.", ToolTipIcon.Info); }
+                if (!toldAboutTray) { toldAboutTray = true; tray.ShowBalloonTip(4000, Program.L("Mechano DM is still running", "Mechano DM لسه شغال"), Program.L("Downloads continue here. Double-click this icon to open the window; right-click → Exit to quit.", "التحميلات مكملة هنا. دبل كليك على الأيقونة دي تفتح النافذة؛ كليك يمين ← خروج للقفل."), ToolTipIcon.Info); }
             };
         }
         if (!main.Visible) main.Show();
@@ -649,9 +745,116 @@ class PopupForm : Form
     }
 }
 
-// ====================================================================== "New download" window
-class ConfirmForm : PopupForm
+// ====================================================================== "Download File Info" window (WebView2)
+// Shows ui/dialog.html (the same page the main window uses), floating on top of everything.
+// The page talks to this window with postMessage: theme (title bar colour), browse (folder
+// dialog), done (close). If WebView2 cannot start, Host falls back to the WinForms ConfirmForm.
+interface IConfirmWindow
 {
+    string JobId { get; }
+    bool Silent { get; set; }
+    bool Failed { get; }
+    void Close();
+    bool IsDisposed { get; }
+}
+
+class WebConfirmForm : PopupForm, IConfirmWindow
+{
+    static CoreWebView2Environment env;
+    public static bool Broken; // WebView2 failed once: use the WinForms window from now on
+    readonly Api api;
+    readonly string id;
+    WebView2 web;
+    bool done;
+    public bool Silent { get; set; }
+    public bool Failed { get; private set; }
+    public string JobId { get { return id; } }
+
+    public WebConfirmForm(Api api, string id)
+    {
+        this.api = api;
+        this.id = id;
+        Text = "Download File Info - Mechano DM";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = true;
+        ShowInTaskbar = true;
+        StartPosition = FormStartPosition.CenterScreen;
+        ClientSize = new Size(660, 470);
+        bool dark = Native.SystemUsesDarkMode();
+        BackColor = dark ? Color.FromArgb(24, 27, 31) : Color.White;
+        HandleCreated += delegate { Native.UseDarkTitleBar(Handle, dark); };
+        FormClosing += delegate (object s, FormClosingEventArgs e)
+        {
+            // Closing with X = Cancel (but not when the app exits or the page already finished)
+            if (Silent || done || Failed) return;
+            done = true;
+            Task.Run(() => { try { api.Post("/api/jobs/" + id + "/remove", "{\"deleteFiles\":false}"); } catch { } });
+        };
+        Load += async delegate { await InitWeb(); };
+        PerformAutoScale();
+    }
+
+    async Task InitWeb()
+    {
+        try
+        {
+            web = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = BackColor };
+            Controls.Add(web);
+            if (env == null)
+            {
+                string data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"MechanoDM\webview");
+                env = await CoreWebView2Environment.CreateAsync(null, data);
+            }
+            await web.EnsureCoreWebView2Async(env);
+            var s = web.CoreWebView2.Settings;
+            s.AreDevToolsEnabled = false;
+            s.IsStatusBarEnabled = false;
+            s.AreDefaultContextMenusEnabled = false;
+            s.IsZoomControlEnabled = false;
+            web.CoreWebView2.NewWindowRequested += delegate (object o, CoreWebView2NewWindowRequestedEventArgs e) { e.Handled = true; };
+            web.CoreWebView2.WebMessageReceived += delegate (object o, CoreWebView2WebMessageReceivedEventArgs e) { OnMessage(e.WebMessageAsJson); };
+            web.Source = new Uri(api.Base + "/dialog.html?id=" + Uri.EscapeDataString(id));
+        }
+        catch (Exception ex)
+        {
+            Program.Log("Download File Info window: WebView2 failed (" + ex.Message + ") - using the simple window");
+            Broken = true;
+            Failed = true;
+            BeginInvoke((Action)Close);
+        }
+    }
+
+    void OnMessage(string json)
+    {
+        Dictionary<string, object> m = null;
+        try { m = new JavaScriptSerializer().DeserializeObject(json) as Dictionary<string, object>; } catch { }
+        string type = Api.Str(m, "type");
+        if (type == "done") { done = true; Close(); }
+        else if (type == "theme")
+        {
+            bool dark = m.ContainsKey("dark") && Convert.ToBoolean(m["dark"]);
+            Native.UseDarkTitleBar(Handle, dark);
+            BackColor = dark ? Color.FromArgb(24, 27, 31) : Color.White;
+        }
+        else if (type == "browse")
+        {
+            string start = Api.Str(m, "start");
+            string chosen = null;
+            using (var dlg = new FolderBrowserDialog { Description = Program.L("Choose where to save this download", "اختار مكان حفظ التحميل ده"), ShowNewFolderButton = true })
+            {
+                if (!string.IsNullOrEmpty(start) && Directory.Exists(start)) dlg.SelectedPath = start;
+                if (dlg.ShowDialog(this) == DialogResult.OK) chosen = dlg.SelectedPath;
+            }
+            try { web.CoreWebView2.PostWebMessageAsJson("{\"type\":\"folder\",\"path\":" + Api.Q(chosen) + "}"); } catch { }
+        }
+    }
+}
+
+// ====================================================================== "New download" window (simple fallback)
+class ConfirmForm : PopupForm, IConfirmWindow
+{
+    public bool Failed { get { return false; } }
     readonly Api api;
     readonly string id;
     readonly Label name, meta, url, note, count;
@@ -664,7 +867,7 @@ class ConfirmForm : PopupForm
     Dictionary<string, object> folders;
     string autoFolder;
     bool busy;
-    public bool Silent; // set when the app exits: closing then must not cancel the download
+    public bool Silent { get; set; } // set when the app exits: closing then must not cancel the download
     public string JobId { get { return id; } }
 
     class Choice
@@ -889,7 +1092,7 @@ class CompleteForm : PopupForm
         file = Api.Str(j, "file") ?? "";
         isFolder = Directory.Exists(file);
         string name = Api.Str(j, "filename") ?? Path.GetFileName(file);
-        Text = "Download complete";
+        Text = Program.L("Download complete", "اكتمل التحميل");
         FormBorderStyle = FormBorderStyle.FixedToolWindow;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
@@ -899,7 +1102,7 @@ class CompleteForm : PopupForm
 
         var icon = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Size = new Size(40, 40), Location = new Point(16, 18) };
         try { icon.Image = isFolder ? Program.Logo() : Icon.ExtractAssociatedIcon(file).ToBitmap(); } catch { icon.Image = Program.Logo(); }
-        var ok = new Label { Text = "✓ Download complete", AutoSize = true, ForeColor = Color.FromArgb(30, 158, 85), Font = new Font("Segoe UI Semibold", 9.5f), Location = new Point(68, 14) };
+        var ok = new Label { Text = Program.L("✓ Download complete", "✓ اكتمل التحميل"), AutoSize = true, ForeColor = Color.FromArgb(30, 158, 85), Font = new Font("Segoe UI Semibold", 9.5f), Location = new Point(68, 14) };
         var nm = new Label { Text = name, AutoEllipsis = true, AutoSize = false, Size = new Size(345, 22), Font = new Font("Segoe UI", 10.5f, FontStyle.Bold), ForeColor = Ink, Location = new Point(68, 34) };
         double size = j.ContainsKey("size") && j["size"] != null ? Convert.ToDouble(j["size"]) : 0;
         var where = new Label
@@ -908,9 +1111,9 @@ class CompleteForm : PopupForm
             AutoEllipsis = true, AutoSize = false, Size = new Size(345, 20), ForeColor = Muted, Font = new Font("Segoe UI", 8.75f), Location = new Point(68, 58),
         };
         new ToolTip().SetToolTip(where, where.Text);
-        var open = MakeButton(isFolder ? "Open folder" : "Open", true);
-        var folderBtn = MakeButton("Show in folder");
-        var close = MakeButton("Close");
+        var open = MakeButton(isFolder ? Program.L("Open folder", "افتح الفولدر") : Program.L("Open", "افتح"), true);
+        var folderBtn = MakeButton(Program.L("Show in folder", "اعرض في الفولدر"));
+        var close = MakeButton(Program.L("Close", "اقفل"));
         var row = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Location = new Point(10, 100), Size = new Size(408, 40), WrapContents = false };
         row.Controls.Add(close);
         if (!isFolder) row.Controls.Add(folderBtn);
@@ -941,9 +1144,36 @@ class CompleteForm : PopupForm
     protected override bool ShowWithoutActivation { get { return true; } } // don't steal focus from your work
 }
 
+// ====================================================================== clipboard monitor
+// A message-only window that Windows tells about every clipboard change (no polling).
+class ClipboardWatcher : NativeWindow
+{
+    const int WM_CLIPBOARDUPDATE = 0x031D;
+    readonly Action changed;
+    DateTime last = DateTime.MinValue;
+
+    public ClipboardWatcher(Action changed)
+    {
+        this.changed = changed;
+        CreateHandle(new CreateParams { Parent = new IntPtr(-3) /* HWND_MESSAGE */ });
+        if (!Native.AddClipboardFormatListener(Handle)) Program.Log("clipboard monitor could not start");
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WM_CLIPBOARDUPDATE)
+        {
+            // some apps write the clipboard several times in a row
+            if ((DateTime.Now - last).TotalMilliseconds > 300) { last = DateTime.Now; try { changed(); } catch { } }
+        }
+        base.WndProc(ref m);
+    }
+}
+
 // ====================================================================== Win32
 static class Native
 {
+    [DllImport("user32.dll", SetLastError = true)] public static extern bool AddClipboardFormatListener(IntPtr h);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern bool SetDllDirectory(string path);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string id);

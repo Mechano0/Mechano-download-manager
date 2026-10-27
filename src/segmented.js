@@ -211,33 +211,43 @@ class SegmentedDownload extends EventEmitter {
       seg.pos = 0;
       await this.fh.truncate(0);
     }
-    const headers = { ...this.o.headers };
-    if (!this.single || seg.pos > 0) {
-      headers.range = `bytes=${seg.pos}-${isFinite(seg.end) ? seg.end : ''}`;
-      if (this.validator) headers['if-range'] = this.validator;
-    }
-    const { res } = await request(this.url, { headers, signal: this.ac.signal });
-    if (res.statusCode === 200 && headers.range) {
-      res.destroy();
-      if (this.validator && this.info.resumable) throw new EntityChanged();
-      throw new RangeUnsupported();
-    }
-    if (res.statusCode >= 400) { res.resume(); throw new HttpError(res.statusCode, this.url); }
-    if (res.statusCode !== 200 && res.statusCode !== 206) { res.resume(); throw new Error(`Unexpected HTTP ${res.statusCode}`); }
+    // Some servers (YouTube's googlevideo) slow a connection down to playback speed when one
+    // request asks for a big range: o.maxRequest splits a segment into several smaller requests.
+    const maxReq = this.single ? 0 : this.o.maxRequest || 0;
+    do {
+      const headers = { ...this.o.headers };
+      if (!this.single || seg.pos > 0) {
+        const end = isFinite(seg.end) ? (maxReq ? Math.min(seg.end, seg.pos + maxReq - 1) : seg.end) : '';
+        headers.range = `bytes=${seg.pos}-${end}`;
+        if (this.validator) headers['if-range'] = this.validator;
+      }
+      const reqEnd = maxReq && isFinite(seg.end) ? Math.min(seg.end, seg.pos + maxReq - 1) : seg.end;
+      const { res } = await request(this.url, { headers, signal: this.ac.signal });
+      if (res.statusCode === 200 && headers.range) {
+        res.destroy();
+        if (this.validator && this.info.resumable) throw new EntityChanged();
+        throw new RangeUnsupported();
+      }
+      if (res.statusCode >= 400) { res.resume(); throw new HttpError(res.statusCode, this.url); }
+      if (res.statusCode !== 200 && res.statusCode !== 206) { res.resume(); throw new Error(`Unexpected HTTP ${res.statusCode}`); }
 
-    for await (const chunk of res) {
-      if (this.stopped) { res.destroy(); return; }
-      const left = seg.end - seg.pos + 1;
-      if (left <= 0) break;
-      const buf = chunk.length > left ? chunk.subarray(0, left) : chunk;
-      seg.inflight = buf.length; // protects these bytes from being split away
-      if (this.o.limiter) await this.o.limiter.take(buf.length, this.ac.signal);
-      await this.fh.write(buf, 0, buf.length, seg.pos);
-      seg.pos += buf.length;
-      seg.inflight = 0;
-      if (seg.pos > seg.end) break;
-    }
-    res.destroy();
+      for await (const chunk of res) {
+        if (this.stopped) { res.destroy(); return; }
+        const left = seg.end - seg.pos + 1;
+        if (left <= 0) break;
+        const buf = chunk.length > left ? chunk.subarray(0, left) : chunk;
+        seg.inflight = buf.length; // protects these bytes from being split away
+        if (this.o.limiter) await this.o.limiter.take(buf.length, this.ac.signal);
+        await this.fh.write(buf, 0, buf.length, seg.pos);
+        seg.pos += buf.length;
+        seg.inflight = 0;
+        if (seg.pos > seg.end) break;
+      }
+      res.destroy();
+      if (this.stopped) return;
+      // this request's slice is done but the segment isn't: ask for the next slice
+      if (!(maxReq && seg.pos > reqEnd && seg.pos <= seg.end)) break;
+    } while (true); // eslint-disable-line no-constant-condition
     seg.busy = false;
     if (this.single && !isFinite(seg.end)) { this.singleDone = true; seg.end = seg.pos - 1; return; }
     if (this.stopped) return;

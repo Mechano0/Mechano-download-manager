@@ -1,5 +1,5 @@
 # Builds a portable copy of Mechano Download Manager: one folder (and a .zip of it) that runs on
-# any Windows 10/11 PC without installing anything. It includes Node.js, yt-dlp and ffmpeg.
+# any Windows 10/11 PC without installing anything. It includes Node.js, yt-dlp, ffmpeg and aria2.
 # Your personal data (data\: history, private key, cookies, logs) is NOT included.
 #
 #   powershell -ExecutionPolicy Bypass -File build-portable.ps1
@@ -39,18 +39,44 @@ yt-dlp is released into the public domain under The Unlicense.
 Source code and full license: https://github.com/yt-dlp/yt-dlp
 '@
 
-$ffmpeg = (Get-Command ffmpeg).Source
-Copy-Item $ffmpeg (Join-Path $out 'bin\ffmpeg.exe')
-$ffLic = Join-Path (Split-Path (Split-Path $ffmpeg)) 'LICENSE.txt'
-if (Test-Path $ffLic) { Copy-Item $ffLic (Join-Path $lic 'FFmpeg-LICENSE.txt') }
-Add-Content -Encoding utf8 (Join-Path $lic 'FFmpeg-LICENSE.txt') @"
+# ffmpeg: our own small LGPL build (tools\ffmpeg\build.sh, made by GitHub Actions, about 4 MB)
+# when it is in tools\ffmpeg\out\; otherwise the full GPL build found on this PC.
+$small = Join-Path $root 'tools\ffmpeg\out\ffmpeg.exe'
+if (Test-Path $small) {
+  Copy-Item $small (Join-Path $out 'bin\ffmpeg.exe')
+  Copy-Item (Join-Path $root 'tools\ffmpeg\out\ffmpeg-LICENSE.txt') (Join-Path $lic 'FFmpeg-LICENSE.txt')
+  Copy-Item (Join-Path $root 'tools\ffmpeg\out\lame-COPYING.txt') (Join-Path $lic 'LAME-LICENSE.txt')
+  Add-Content -Encoding utf8 (Join-Path $lic 'FFmpeg-LICENSE.txt') @"
+
+---
+$(Get-Content (Join-Path $root 'tools\ffmpeg\out\ffmpeg-version.txt'))
+Built from the official FFmpeg and LAME sources by tools/ffmpeg/build.sh in
+https://github.com/Mechano0/mechano-download-manager (LGPL; source: https://ffmpeg.org/download.html, https://lame.sourceforge.io)
+"@
+} else {
+  $ffmpeg = (Get-Command ffmpeg).Source
+  Copy-Item $ffmpeg (Join-Path $out 'bin\ffmpeg.exe')
+  $ffLic = Join-Path (Split-Path (Split-Path $ffmpeg)) 'LICENSE.txt'
+  if (Test-Path $ffLic) { Copy-Item $ffLic (Join-Path $lic 'FFmpeg-LICENSE.txt') }
+  Add-Content -Encoding utf8 (Join-Path $lic 'FFmpeg-LICENSE.txt') @"
 
 ---
 This copy of FFmpeg ($(& $ffmpeg -version | Select-Object -First 1)) is the GPL build published by
 the yt-dlp project. Its complete source code is available at:
 https://github.com/yt-dlp/FFmpeg-Builds  and  https://ffmpeg.org/download.html
 "@
+}
 
+# aria2c (torrents), GPL-2.0, official build from https://github.com/aria2/aria2/releases
+Copy-Item (Join-Path $root 'bin\aria2c.exe') (Join-Path $out 'bin\aria2c.exe')
+Copy-Item (Join-Path $root 'bin\aria2-COPYING.txt') (Join-Path $lic 'aria2-LICENSE.txt')
+Copy-Item (Join-Path $root 'bin\aria2-LICENSE.OpenSSL.txt') (Join-Path $lic 'aria2-OpenSSL-LICENSE.txt')
+Add-Content -Encoding utf8 (Join-Path $lic 'aria2-LICENSE.txt') @"
+
+---
+aria2 $((& (Join-Path $root 'bin\aria2c.exe') --version | Select-Object -First 1) -replace 'aria2 version ','') - unmodified official Windows build.
+Source code: https://github.com/aria2/aria2
+"@
 # 3) First-run helpers for the new PC
 Set-Content -Encoding ascii (Join-Path $out 'Create desktop shortcut.cmd') @'
 @echo off

@@ -16,8 +16,10 @@ const { SegmentedDownload } = require('./segmented');
 const { HlsDownload } = require('./hls');
 const { YtdlpDownload, findTool, writeCookiesFile } = require('./ytdlp');
 const { RateLimiter } = require('./limiter');
-const { categorize, CATEGORIES, filenameFromUrl } = require('./util');
+const { categorize, CATEGORIES, filenameFromUrl, sanitizeFilename } = require('./util');
 const { PlaylistDownload } = require('./playlist');
+const { MediaDownload } = require('./media');
+const { TorrentDownload, isMagnet, isTorrentUrl } = require('./torrent');
 
 const YTDLP_SITES = [
   'youtube.com', 'youtu.be', 'youtube-nocookie.com', 'facebook.com', 'fb.watch', 'instagram.com', 'tiktok.com',
@@ -41,7 +43,17 @@ const DEFAULT_CONFIG = {
   ytdlpSites: YTDLP_SITES,
   autoUpdateDays: 5, // update yt-dlp automatically every N days (0 = off)
   ytdlpChannel: 'stable', // 'stable' or 'nightly'
+  fastVideo: true, // videos: our multi-connection engine downloads the links yt-dlp finds (media.js)
+  language: 'auto', // 'auto' (Windows language), 'en' or 'ar'
+  clipboardMonitor: true, // offer to download links you copy (Mechano DM.exe watches the clipboard)
+  categoryDirs: {}, // "Remember this path for the category": { Video: 'D:\\Videos', ... }
+  appUpdate: 'notify', // new versions of Mechano DM: 'notify' (ask first), 'auto' or 'off'
 };
+
+const CATEGORY_NAMES = ['General', 'Video', 'Music', 'Compressed', 'Documents', 'Programs', 'Images'];
+// Copied links that count as downloads (pictures and plain text files are left alone)
+const CLIPBOARD_EXTS = new Set([...CATEGORIES.Compressed, ...CATEGORIES.Documents, ...CATEGORIES.Music, ...CATEGORIES.Programs, ...CATEGORIES.Video,
+  'torrent'].filter((e) => !['txt', 'csv', 'bat'].includes(e)));
 
 class Manager extends EventEmitter {
   constructor(dataDir) {
@@ -82,6 +94,7 @@ class Manager extends EventEmitter {
     return {
       ytdlp: findTool('yt-dlp', this.config.ytdlpPath),
       ffmpeg: findTool('ffmpeg', this.config.ffmpegPath),
+      aria2: findTool('aria2c'),
       node: process.execPath,
     };
   }
@@ -97,22 +110,43 @@ class Manager extends EventEmitter {
     }
   }
 
+  /** The category a download belongs to (its folder, unless the user picked one). */
+  categoryOf(job, filename) {
+    if (job.category && CATEGORY_NAMES.includes(job.category)) return job.category;
+    if (job.kind === 'ytdlp') return job.audioOnly ? 'Music' : 'Video';
+    if (job.kind === 'hls') return 'Video';
+    if (job.kind === 'torrent') return 'General';
+    return categorize(filename || '');
+  }
+
+  /** Folder of a category: the remembered one, else Downloads\M.DM\<Category>. */
+  categoryDir(cat) {
+    const cfg = this.config;
+    const remembered = cfg.categoryDirs && cfg.categoryDirs[cat];
+    if (remembered && path.isAbsolute(remembered)) return remembered;
+    return cfg.useCategories ? path.join(cfg.downloadDir, cat) : cfg.downloadDir;
+  }
+
   /** The folder a download goes to by default (its category folder). */
   suggestDir(job, filename) {
-    const cfg = this.config;
-    if (!cfg.useCategories) return cfg.downloadDir;
-    let cat;
-    if (job.kind === 'ytdlp') cat = job.audioOnly ? 'Music' : 'Video';
-    else if (job.kind === 'hls') cat = 'Video';
-    else cat = categorize(filename || '');
-    return path.join(cfg.downloadDir, cat);
+    return this.categoryDir(this.categoryOf(job, filename));
   }
 
   updateConfig(patch) {
-    const allowed = ['downloadDir', 'useCategories', 'maxConcurrent', 'connections', 'speedLimitKBps', 'hlsConcurrency', 'ytdlpPath', 'ffmpegPath', 'ytdlpSites', 'autoUpdateDays', 'ytdlpChannel', 'confirmDownloads', 'showCompleteDialog'];
+    const allowed = ['downloadDir', 'useCategories', 'maxConcurrent', 'connections', 'speedLimitKBps', 'hlsConcurrency', 'ytdlpPath', 'ffmpegPath', 'ytdlpSites', 'autoUpdateDays', 'ytdlpChannel', 'confirmDownloads', 'showCompleteDialog', 'fastVideo',
+      'language', 'clipboardMonitor', 'categoryDirs', 'appUpdate'];
     for (const k of allowed) if (k in patch) this.config[k] = patch[k];
     this.config.confirmDownloads = !!this.config.confirmDownloads;
     this.config.showCompleteDialog = !!this.config.showCompleteDialog;
+    this.config.fastVideo = this.config.fastVideo !== false;
+    this.config.clipboardMonitor = !!this.config.clipboardMonitor;
+    if (!['auto', 'en', 'ar'].includes(this.config.language)) this.config.language = 'auto';
+    if (!['notify', 'auto', 'off'].includes(this.config.appUpdate)) this.config.appUpdate = 'notify';
+    const dirs = {};
+    for (const [k, v] of Object.entries(this.config.categoryDirs || {})) {
+      if (CATEGORY_NAMES.includes(k) && typeof v === 'string' && path.isAbsolute(v)) dirs[k] = v;
+    }
+    this.config.categoryDirs = dirs;
     if (!path.isAbsolute(String(this.config.downloadDir || ''))) throw new Error('Download folder must be a full path, like C:\\Users\\you\\Downloads\\M.DM');
     this.ensureCategoryFolders();
     this.config.autoUpdateDays = Math.min(60, Math.max(0, Math.round(Number(this.config.autoUpdateDays) || 0)));
@@ -134,13 +168,37 @@ class Manager extends EventEmitter {
   // --- jobs ---------------------------------------------------------------------
   detectKind(url, mime) {
     let u;
+    if (isMagnet(url)) return 'torrent';
     try { u = new URL(url); } catch { throw new Error('Invalid URL'); }
-    if (!/^https?:$/.test(u.protocol)) throw new Error('Only http(s) URLs are supported');
+    if (!/^https?:$/.test(u.protocol)) throw new Error('Only http(s) and magnet links are supported');
+    if (isTorrentUrl(url) || /bittorrent/i.test(mime || '')) return 'torrent';
     const host = u.hostname.replace(/^www\./, '');
     if (/mpegurl/i.test(mime || '') || /\.m3u8?$/i.test(u.pathname)) return 'hls';
     if (/dash\+xml/i.test(mime || '') || /\.mpd$/i.test(u.pathname)) return 'ytdlp';
     if (this.config.ytdlpSites.some((s) => host === s || host.endsWith('.' + s))) return 'ytdlp';
     return 'direct';
+  }
+
+  /**
+   * A link was copied (Mechano DM.exe watches the clipboard). Downloadable links open the
+   * "Download File Info" window; everything else is ignored quietly.
+   */
+  fromClipboard(text) {
+    if (!this.config.clipboardMonitor) return { added: false, reason: 'clipboard monitor is off' };
+    const url = String(text || '').trim();
+    if (!url || url.length > 4000 || /\s/.test(url)) return { added: false, reason: 'not a single link' };
+    let kind, u;
+    try { u = new URL(url); kind = this.detectKind(url); } catch { return { added: false, reason: 'not a link' }; }
+    if (kind === 'direct') {
+      const ext = path.extname(u.pathname).slice(1).toLowerCase();
+      if (!CLIPBOARD_EXTS.has(ext)) return { added: false, reason: 'not a file link' };
+    }
+    if (kind === 'ytdlp' && u.pathname.replace(/\/+$/, '') === '') return { added: false, reason: 'site home page' };
+    const now = Date.now();
+    if (this.lastClip && this.lastClip.url === url && now - this.lastClip.at < 15000) return { added: false, reason: 'just offered' };
+    this.lastClip = { url, at: now };
+    if ([...this.jobs.values()].some((j) => j.url === url && !['done', 'error'].includes(j.status))) return { added: false, reason: 'already in the list' };
+    return { added: true, job: this.add({ url, kind, forceConfirm: true, source: 'clipboard' }) };
   }
 
   /**
@@ -150,14 +208,17 @@ class Manager extends EventEmitter {
   add(spec) {
     if (!spec || typeof spec.url !== 'string') throw new Error('url is required');
     const kind = spec.kind && spec.kind !== 'auto' ? spec.kind : this.detectKind(spec.url, spec.mime);
-    if (!['direct', 'hls', 'ytdlp'].includes(kind)) throw new Error('Unknown kind');
+    if (!['direct', 'hls', 'ytdlp', 'torrent'].includes(kind)) throw new Error('Unknown kind');
     const id = crypto.randomBytes(6).toString('hex');
     const job = {
       // "Download later": waits in status 'scheduled' until the scheduler's start time
       // 'confirm' = waiting for the user to approve it and check the save folder (IDM "Download File Info")
       id, url: spec.url, kind, createdAt: Date.now(), scheduled: !!spec.scheduled,
-      status: spec.scheduled ? 'scheduled' : (this.config.confirmDownloads && !spec.confirmed ? 'confirm' : 'queued'),
+      // forceConfirm: links from the clipboard always ask first, even with "Don't ask again"
+      status: spec.scheduled ? 'scheduled' : ((this.config.confirmDownloads || spec.forceConfirm) && !spec.confirmed ? 'confirm' : 'queued'),
       filename: spec.filename ? String(spec.filename) : null,
+      description: spec.description ? String(spec.description).slice(0, 500) : null,
+      source: ['clipboard', 'browser', 'grabber', 'app'].includes(spec.source) ? spec.source : null,
       dir: spec.dir || null, target: null, file: null,
       connections: spec.connections ? clampInt(spec.connections, 1, 32) : null,
       referrer: spec.referrer || null, userAgent: spec.userAgent || null,
@@ -213,6 +274,7 @@ class Manager extends EventEmitter {
     let size = null;
     let note = null;
     let qualities = null; // media sites: the choices for the quality list in the popup
+    let site = null, duration = null, resumable = null, thumbnail = null;
     try {
       if (job.kind === 'direct') {
         const cookie = cookieHeader(job.cookies, job.url);
@@ -220,7 +282,13 @@ class Manager extends EventEmitter {
         const info = await require('./probe').probe(job.url, { headers });
         name = job.filename || info.filename;
         size = info.size;
+        resumable = info.resumable;
         if (info.contentType === 'text/html') note = 'This link is a web page; the video on it will be downloaded with yt-dlp.';
+      } else if (job.kind === 'torrent') {
+        const t = await require('./torrent').describe(job.url);
+        name = t.name;
+        size = t.size;
+        site = 'Torrent';
       } else if (job.kind === 'ytdlp') {
         const t = this.tools();
         const { info: ytInfo, playlistInfo } = require('./ytdlp');
@@ -234,6 +302,9 @@ class Manager extends EventEmitter {
           const i = await ytInfo(job.url, { ytdlp: t.ytdlp });
           name = i.title;
           qualities = qualityOptions(i.formats);
+          site = i.extractor || null;
+          duration = i.duration || null;
+          thumbnail = /^https:\/\//.test(i.thumbnail || '') ? i.thumbnail : null;
         }
       } else {
         name = name || (filenameFromUrl(job.url) || 'video').replace(/\.m3u8?$/i, '') + '.mp4';
@@ -241,12 +312,23 @@ class Manager extends EventEmitter {
     } catch (e) {
       note = `Could not read the details (${e.message}). You can still start the download.`;
     }
+    name = name || filenameFromUrl(job.url) || job.url;
+    const category = this.categoryOf(job, name);
+    // the name in "Save As": files keep their extension; videos get the one they will be saved with
+    const media = job.kind === 'ytdlp' && !job.playlist;
+    const ext = media ? (job.audioOnly ? 'mp3' : 'mp4') : job.kind === 'hls' ? 'mp4' : path.extname(name).slice(1).toLowerCase();
+    let fileName = job.kind === 'ytdlp' || job.kind === 'torrent' ? sanitizeFilename(name).slice(0, 120) : sanitizeFilename(name);
+    if (media) fileName += '.' + ext;
     job.details = {
-      name: name || filenameFromUrl(job.url) || job.url, size, folder: this.suggestDir(job, name), note,
-      kind: job.kind, playlist: !!job.playlist, qualities,
+      name, fileName, size, folder: this.suggestDir(job, name), note,
+      kind: job.kind, playlist: !!job.playlist, qualities, site, duration, resumable, thumbnail, ext,
+      category, categories: CATEGORY_NAMES,
+      categoryDirs: Object.fromEntries(CATEGORY_NAMES.map((c) => [c, this.categoryDir(c)])),
+      remembered: Object.keys(this.config.categoryDirs || {}),
+      connections: job.connections || this.config.connections,
+      description: job.description || '',
       // media sites: where a video vs. an audio-only download goes (the popup switches between them)
-      folders: job.kind === 'ytdlp' && this.config.useCategories
-        ? { video: path.join(this.config.downloadDir, 'Video'), audio: path.join(this.config.downloadDir, 'Music') } : null,
+      folders: job.kind === 'ytdlp' ? { video: this.categoryDir('Video'), audio: this.categoryDir('Music') } : null,
       selected: job.audioOnly ? 'audio' : job.maxHeight ? String(job.maxHeight) : 'best',
     };
     return job.details;
@@ -256,7 +338,7 @@ class Manager extends EventEmitter {
    * Approve a download from the popup: optional custom folder and quality; start now or put it
    * in the scheduler. quality = 'best' | 'audio' | a height such as '1080'.
    */
-  confirm(id, { dir, later, quality } = {}) {
+  confirm(id, { dir, later, quality, filename, category, rememberPath, description, connections } = {}) {
     const job = this.mustGet(id);
     if (job.status !== 'confirm') return publicJob(job);
     if (quality != null && job.kind === 'ytdlp') {
@@ -265,12 +347,27 @@ class Manager extends EventEmitter {
       job.maxHeight = /^\d+$/.test(q) ? Number(q) : null;
       if (!dir) job.dir = null; // category follows the choice (Music for audio, Video otherwise)
     }
+    if (category && CATEGORY_NAMES.includes(category)) job.category = category;
     if (dir) {
       const d = String(dir).trim();
       if (!path.isAbsolute(d)) throw new Error('Choose a full folder path, like D:\\Videos');
       fs.mkdirSync(d, { recursive: true });
       job.dir = d; // exact folder chosen by the user (no category sub-folder)
+      if (rememberPath) {
+        const cat = this.categoryOf(job, job.filename || job.details?.name);
+        this.config.categoryDirs = { ...(this.config.categoryDirs || {}), [cat]: d };
+        this.saveConfig();
+      }
     }
+    if (filename) {
+      // "Save As" name. Videos: the extension comes from the download (mp4 / mp3 ...).
+      let n = sanitizeFilename(String(filename).trim());
+      if (job.kind === 'ytdlp' || job.kind === 'hls') n = n.replace(/\.(mp4|mkv|webm|mp3|m4a|mov)$/i, '');
+      if (job.kind === 'ytdlp') job.customName = job.playlist ? null : n;
+      else if (n) job.filename = job.kind === 'hls' ? n + '.mp4' : n;
+    }
+    if (description != null) job.description = String(description).slice(0, 500) || null;
+    if (connections) job.connections = clampInt(connections, 1, 32);
     job.status = later ? 'scheduled' : 'queued';
     job.scheduled = !!later;
     this.changed(job, true);
@@ -456,7 +553,7 @@ class Manager extends EventEmitter {
   makeRunner(job) {
     const cfg = this.config;
     const tools = this.tools();
-    const dirFor = (name) => job.dir || (cfg.useCategories ? path.join(cfg.downloadDir, categorize(name)) : cfg.downloadDir);
+    const dirFor = (name) => job.dir || this.suggestDir(job, name);
     const headers = { ...job.headers };
     if (job.userAgent) headers['user-agent'] = job.userAgent;
     if (job.referrer) headers.referer = job.referrer;
@@ -465,15 +562,29 @@ class Manager extends EventEmitter {
       let cookiesFile = null;
       if (job.cookies && job.cookies.length) cookiesFile = writeCookiesFile(path.join(this.dataDir, 'cookies', job.id + '.txt'), job.cookies);
       const opts = {
-        url: job.url, dir: job.dir || (cfg.useCategories ? path.join(cfg.downloadDir, job.audioOnly ? 'Music' : 'Video') : cfg.downloadDir),
+        url: job.url, dir: job.dir || this.suggestDir(job),
+        // "Save As" name from the dialog (% is yt-dlp's template sign, so it is doubled)
+        outTemplate: job.customName && !job.playlist ? job.customName.replace(/%/g, '%%') + '.%(ext)s' : undefined,
         ytdlp: tools.ytdlp, ffmpeg: tools.ffmpeg, format: job.format, maxHeight: job.maxHeight, audioOnly: job.audioOnly,
         cookiesFile, referer: job.referrer, userAgent: job.userAgent,
         rateLimit: cfg.speedLimitKBps ? cfg.speedLimitKBps * 1024 : 0,
         fragments: Math.min(job.connections || 4, 16),
+        // fast path (media.js): our multi-connection engine downloads what yt-dlp finds
+        fast: cfg.fastVideo !== false && !job.format,
+        limiter: this.limiter,
+        connections: job.connections || cfg.connections,
+        cookieFor: (u) => cookieHeader(job.cookies, u),
       };
       // Playlists: video by video, so each one can be watched, skipped or re-ordered
       if (job.playlist) return new PlaylistDownload(job, opts);
-      return new YtdlpDownload(opts);
+      return opts.fast ? new MediaDownload(opts) : new YtdlpDownload(opts);
+    }
+
+    if (job.kind === 'torrent') {
+      return new TorrentDownload({
+        url: job.url, dir: dirFor(job.filename || ''), aria2: tools.aria2, connections: job.connections || cfg.connections,
+        speedLimit: cfg.speedLimitKBps ? cfg.speedLimitKBps * 1024 : 0,
+      });
     }
 
     const cookie = cookieHeader(job.cookies, job.url);

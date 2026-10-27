@@ -25,12 +25,20 @@ To remove it: **Settings → Apps → Mechano Download Manager → Uninstall**. 
 - **Pause / resume**, even after closing the app or restarting the PC.
 - **YouTube, Facebook, Instagram, TikTok, X, Vimeo, Reddit and more** through yt-dlp, with a quality choice. Saved as MP4 (H.264 + AAC), which plays everywhere.
 - **Whole playlists**: a "Videos" panel shows the current video, and you can skip or re-order videos.
-- **Floating "New download" window** with quality and save folder, and a **"Download complete"** popup with *Open* / *Open folder*.
+- **Fast video downloads**: yt-dlp finds the video, then MDM's own multi-connection engine downloads it (picture and sound in parallel) and ffmpeg joins them without re-encoding.
+- **"Download File Info" window** for every new download: category, quality, *Save As* (full path), *Remember this path for the category*, description, connections, file type and size, *Start* / *Download later* / *Cancel*.
+- **Clipboard monitor**: copy a download link anywhere and the window opens (on/off in Settings or the tray menu).
+- **Torrents**: magnet links and .torrent links (aria2), with pause / resume.
+- **Site Grabber**: lists the files linked from a page (and its pages on the same site); tick and download.
+- **Play while downloading**: opens what is downloaded so far in your video player.
+- **Arabic interface** (right-to-left) or English, from Settings.
+- **Optional app updates**, signed: Settings → App updates (Tell me / Install automatically / Off).
+- **"Download complete"** popup with *Open* / *Open folder*.
 - **Scheduler and queue** like IDM: start time, days of the week, "N files at the same time", re-ordering. After it finishes the app can sleep, hibernate, restart or shut down the PC.
 - **HLS streams** (`.m3u8`) with AES-128, plus a speed limit and category folders (`Downloads\M.DM\Video`, `Music`, …).
 - **yt-dlp updates itself** every 5 days, or press ⟳.
 - **Light / dark themes**, tray icon, start with Windows, and its own taskbar icon.
-- **Browser extension** (Chrome / Edge): a Download button on videos, download takeover, and right-click "Download with Mechano DM".
+- **Browser extension** (Chrome / Edge, and Firefox): a Download button on videos, download takeover, and right-click "Download with Mechano DM".
 
 ## Build from source
 
@@ -45,7 +53,12 @@ desktop\build-exe.cmd
 ```
 
 `build-exe.cmd` builds `Mechano DM.exe` (the Windows window) with the C# compiler that comes with Windows.
-Put `yt-dlp.exe` and `ffmpeg.exe` in `bin\` (or install them with `winget install yt-dlp.yt-dlp`), then run `Mechano DM.exe`.
+Put `yt-dlp.exe`, `ffmpeg.exe` and `aria2c.exe` in `bin\` (or install yt-dlp and ffmpeg with `winget install yt-dlp.yt-dlp`), then run `Mechano DM.exe`.
+The small LGPL ffmpeg the Setup ships is built by `.github/workflows/ffmpeg.yml` (`tools/ffmpeg/build.sh`); put its output in `tools\ffmpeg\out\`.
+
+Firefox extension: `node tools/build-firefox.js` → `dist\mechano-dm-firefox.xpi` (Firefox needs it signed by addons.mozilla.org; for testing load `dist\firefox\manifest.json` in `about:debugging`).
+
+Release updates: after building the Setup, `node tools/sign-release.js --notes "…"` writes `dist\version.json` signed with the release key (kept outside the repository); upload it with the Setup.
 
 To build the one-file installer (`dist\Mechano DM Setup.exe`) and the portable zip:
 
@@ -59,9 +72,9 @@ powershell -ExecutionPolicy Bypass -File build-setup.ps1 -Rebuild
 |---|---|
 | `desktop/MechanoDM.cs` | The Windows app: tray, main window (WebView2), floating windows. It runs the engine. |
 | `desktop/Setup.cs` | The installer / uninstaller (LZX cabinet unpacked with Windows' setupapi). |
-| `src/` | Engine (Node.js): `segmented.js` multi-connection, `hls.js`, `ytdlp.js`, `playlist.js`, `manager.js` queue, `scheduler.js`, `updater.js`, `server.js` local API. |
-| `ui/index.html` | The app's interface. |
-| `extension/` | Chrome / Edge extension (Manifest V3). |
+| `src/` | Engine (Node.js): `segmented.js` multi-connection, `media.js` fast video path, `hls.js`, `ytdlp.js`, `playlist.js`, `torrent.js`, `grabber.js`, `preview.js`, `manager.js` queue, `scheduler.js`, `updater.js` (yt-dlp), `selfupdate.js` (signed app updates), `server.js` local API. |
+| `ui/` | The interface: `index.html` main window, `dialog.html` Download File Info window, `i18n.js` Arabic. |
+| `extension/` | Browser extension (Manifest V3; `tools/build-firefox.js` makes the Firefox package). |
 | `test/` | Offline tests (`node --test test/`). |
 
 ### Security
@@ -73,4 +86,4 @@ Cookies a download needs are kept only for that download, then deleted.
 
 - Download only content you have the right to save: your own files, public-domain or Creative Commons media, or anything the site's terms allow.
 - **DRM-protected media** (Netflix, Disney+, Spotify, Widevine/FairPlay, SAMPLE-AES) is detected and refused. MDM does not bypass DRM.
-- Code: [MIT License](LICENSE). The Setup bundles Node.js (MIT), yt-dlp (Unlicense) and FFmpeg (GPL), each with its license.
+- Code: [MIT License](LICENSE). The Setup bundles Node.js (MIT), yt-dlp (Unlicense), FFmpeg + LAME (LGPL, own small build) and aria2 (GPL-2.0, unmodified), each with its license.

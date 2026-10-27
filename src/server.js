@@ -17,14 +17,15 @@ const { info: ytdlpInfo, playlistInfo, isPlaylistUrl, writeCookiesFile } = requi
 const { probe } = require('./probe');
 const { cookieHeader } = require('./manager');
 
-const UI_FILE = path.join(__dirname, '..', 'ui', 'index.html');
+const UI_DIR = path.join(__dirname, '..', 'ui');
+const UI_FILE = path.join(UI_DIR, 'index.html');
 const EXT_ORIGIN = /^(chrome-extension|moz-extension|extension):\/\/[a-z0-9-]+$/i;
 
 /**
  * @param {import('./manager').Manager} manager
  * @param {{ updater?: import('./updater').Updater }} [opts]
  */
-function createServer(manager, { updater = null, scheduler = null } = {}) {
+function createServer(manager, { updater = null, scheduler = null, selfUpdater = null } = {}) {
   const token = manager.config.token;
   const clients = new Set();
   // Small rolling request log (data/server.log) for troubleshooting the browser extension.
@@ -43,6 +44,7 @@ function createServer(manager, { updater = null, scheduler = null } = {}) {
   manager.on('job', (j) => broadcast('job', j));
   manager.on('removed', (id) => broadcast('removed', { id }));
   if (updater) updater.on('status', (s) => broadcast('update', s));
+  if (selfUpdater) selfUpdater.on('status', (s) => broadcast('appupdate', s));
   if (scheduler) {
     scheduler.on('status', (s) => broadcast('schedule', s));
     // Jobs added/started/finished change the "N waiting" / "x of y finished" numbers.
@@ -73,9 +75,19 @@ function createServer(manager, { updater = null, scheduler = null } = {}) {
       if (req.method === 'OPTIONS') return send(res, extOrigin ? 204 : 403);
 
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-        const html = fs.readFileSync(UI_FILE, 'utf8').replace('__MDM_TOKEN__', token);
+        const html = fs.readFileSync(UI_FILE, 'utf8').replace('__MDM_TOKEN__', token).replace('__MDM_LANG__', uiLanguage(manager.config.language));
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY' });
         return res.end(html);
+      }
+      if (req.method === 'GET' && url.pathname === '/dialog.html') {
+        // "Download File Info" window: its own WebView2 window in the app, an iframe in the main page
+        const html = fs.readFileSync(path.join(UI_DIR, 'dialog.html'), 'utf8').replace('__MDM_TOKEN__', token).replace('__MDM_LANG__', uiLanguage(manager.config.language));
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'SAMEORIGIN' });
+        return res.end(html);
+      }
+      if (req.method === 'GET' && url.pathname === '/i18n.js') {
+        res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end(fs.readFileSync(path.join(UI_DIR, 'i18n.js')));
       }
       if (req.method === 'GET' && url.pathname === '/logo.png') {
         res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'max-age=86400' });
@@ -109,6 +121,7 @@ function createServer(manager, { updater = null, scheduler = null } = {}) {
         res.write(`event: snapshot\ndata: ${JSON.stringify(manager.list())}\n\n`);
         if (updater) res.write(`event: update\ndata: ${JSON.stringify(updater.status())}\n\n`);
         if (scheduler) res.write(`event: schedule\ndata: ${JSON.stringify(scheduler.status())}\n\n`);
+        if (selfUpdater) res.write(`event: appupdate\ndata: ${JSON.stringify(selfUpdater.status())}\n\n`);
         clients.add(res);
         log(`window connected (live updates) ua=${String(req.headers['user-agent'] || '').includes('Edg/') ? 'webview/edge' : 'other'}`);
         const ka = setInterval(() => res.write(': keep-alive\n\n'), 20000);
@@ -120,6 +133,18 @@ function createServer(manager, { updater = null, scheduler = null } = {}) {
         // Mechano DM.exe says "I'm here" every few seconds: it shows the download/complete popups itself.
         if (req.method === 'POST') manager.hostSeenAt = Date.now();
         return send(res, 200, { native: Date.now() - (manager.hostSeenAt || 0) < 6000 });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/grab') {
+        // Site Grabber: list the files linked from a page (and its sub-pages)
+        const b = await readJson(req);
+        res.mdmError = 'grab depth=' + (b.depth || 0);
+        return send(res, 200, await require('./grabber').grab({ url: b.url, depth: b.depth, categories: b.categories, custom: b.custom, sameSite: b.sameSite, maxPages: b.maxPages }));
+      }
+      if (req.method === 'POST' && url.pathname === '/api/clipboard') {
+        // Mechano DM.exe: "this text was just copied"
+        const r = manager.fromClipboard((await readJson(req)).text);
+        res.mdmError = r.added ? 'clipboard link added' : 'clipboard ignored: ' + r.reason;
+        return send(res, 200, { added: r.added, reason: r.reason || null, id: r.job ? r.job.id : null });
       }
       if (req.method === 'POST' && url.pathname === '/api/pick-folder') {
         // Windows' own "Browse for folder" dialog, opened on top of everything.
@@ -134,6 +159,19 @@ function createServer(manager, { updater = null, scheduler = null } = {}) {
         if (req.method === 'POST' && sub === '/start') { scheduler.startRun('manual'); return send(res, 200, scheduler.status()); }
         if (req.method === 'POST' && sub === '/stop') { scheduler.stopRun('manual'); return send(res, 200, scheduler.status()); }
         if (req.method === 'POST' && sub === '/cancel-action') return send(res, 200, scheduler.cancelAction());
+        return send(res, 404, { error: 'Not found' });
+      }
+      if (url.pathname.startsWith('/api/app-update')) {
+        // Mechano DM's own updates (signed releases from GitHub)
+        if (!selfUpdater) return send(res, 501, { error: 'App updates are not available' });
+        const sub = url.pathname.slice('/api/app-update'.length);
+        if (req.method === 'GET' && sub === '') return send(res, 200, selfUpdater.status());
+        if (req.method === 'POST' && sub === '/check') return send(res, 200, await selfUpdater.check('manual'));
+        if (req.method === 'POST' && sub === '/install') {
+          selfUpdater.install().catch(() => { /* reported in the status */ });
+          await new Promise((r) => setImmediate(r));
+          return send(res, 200, selfUpdater.status());
+        }
         return send(res, 404, { error: 'Not found' });
       }
       if (url.pathname === '/api/update') {
@@ -167,6 +205,12 @@ function createServer(manager, { updater = null, scheduler = null } = {}) {
           await manager.remove(id, !!body.deleteFiles);
           return send(res, 200, { ok: true });
         }
+        if (action === 'play') {
+          // Play while downloading: a copy of what is downloaded so far opens in the Windows player
+          const job = manager.mustGet(id);
+          const file = await require('./preview').makePreview({ job, runner: manager.runners.get(id), dataDir: manager.dataDir, ffmpeg: manager.tools().ffmpeg });
+          return send(res, 200, { ok: true, file });
+        }
         if (action === 'reveal') {
           const job = manager.mustGet(id);
           const target = job.file || job.target;
@@ -180,6 +224,7 @@ function createServer(manager, { updater = null, scheduler = null } = {}) {
         const body = await readJson(req);
         try { res.mdmError = 'info ' + new URL(body.url).pathname; } catch { /* invalid URL is reported below */ }
         const kind = body.kind && body.kind !== 'auto' ? body.kind : manager.detectKind(body.url, body.mime);
+        if (kind === 'torrent') return send(res, 200, { kind, ...(await require('./torrent').describe(body.url)) });
         if (kind === 'ytdlp') {
           if (manager.updating) return send(res, 503, { error: 'yt-dlp is updating right now. Try again in a minute.' });
           const tools = manager.tools();
@@ -225,6 +270,13 @@ function createServer(manager, { updater = null, scheduler = null } = {}) {
   });
 
   return server;
+}
+
+/** Interface language: 'en' / 'ar'; "auto" follows Windows (the page falls back to the browser language). */
+function uiLanguage(setting) {
+  if (setting === 'ar' || setting === 'en') return setting;
+  try { if (/^ar\b/i.test(Intl.DateTimeFormat().resolvedOptions().locale)) return 'ar'; } catch { /* no Intl data */ }
+  return 'auto';
 }
 
 /** Shows the Windows folder picker and resolves with the chosen folder, or null if cancelled. */

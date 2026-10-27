@@ -25,6 +25,7 @@ const { Manager } = require('../src/manager');
 const { createServer } = require('../src/server');
 const { Updater } = require('../src/updater');
 const { Scheduler } = require('../src/scheduler');
+const { SelfUpdater } = require('../src/selfupdate');
 const { SegmentedDownload } = require('../src/segmented');
 const { HlsDownload } = require('../src/hls');
 const { YtdlpDownload, info: ytInfo } = require('../src/ytdlp');
@@ -115,7 +116,8 @@ function cmdServe(a) {
   if (a.port) m.config.port = a.port;
   const updater = new Updater(m); // keeps yt-dlp current (every autoUpdateDays, default 5)
   const scheduler = new Scheduler(m); // "Later" downloads + after-finish action
-  const server = createServer(m, { updater, scheduler });
+  const selfUpdater = new SelfUpdater(m); // new versions of Mechano DM (signed; Settings -> App updates)
+  const server = createServer(m, { updater, scheduler, selfUpdater });
   server.listen(m.config.port, '127.0.0.1', () => {
     const t = m.tools();
     console.log(`Mechano Download Manager running at http://127.0.0.1:${m.config.port}/`);
@@ -124,7 +126,7 @@ function cmdServe(a) {
     console.log(`ffmpeg: ${t.ffmpeg || 'NOT FOUND (no audio+video merging)'}`);
     console.log('Load the extension from the "extension" folder; it pairs automatically.');
   });
-  const stop = () => { updater.stop(); scheduler.stop(); m.shutdown(); server.close(); setTimeout(() => process.exit(0), 300); };
+  const stop = () => { updater.stop(); scheduler.stop(); selfUpdater.stop(); m.shutdown(); server.close(); setTimeout(() => process.exit(0), 300); };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 }

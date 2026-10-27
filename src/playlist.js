@@ -14,6 +14,7 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { YtdlpDownload, playlistInfo } = require('./ytdlp');
 const { sanitizeFilename } = require('./util');
+const { MediaDownload } = require('./media');
 
 class PlaylistDownload extends EventEmitter {
   /**
@@ -59,7 +60,8 @@ class PlaylistDownload extends EventEmitter {
 
   async downloadEntry(e, folder) {
     const pad = String(e.idx).padStart(3, '0');
-    const d = new YtdlpDownload({
+    const Kind = this.o.fast ? MediaDownload : YtdlpDownload;
+    const d = new Kind({
       ...this.o, url: e.url, dir: folder, playlist: false,
       outTemplate: `${pad} - %(title).100B [%(id)s].%(ext)s`,
     });

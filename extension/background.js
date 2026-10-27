@@ -122,10 +122,21 @@ function notifyBadge(tabId, text, color = '#1f6feb') {
 }
 
 // ---------------------------------------------------------------- download takeover
-chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
-  takeOver(item).then((taken) => { if (!taken) suggest(); }).catch(() => suggest());
-  return true; // we answer asynchronously
-});
+if (chrome.downloads.onDeterminingFilename) {
+  // Chrome / Edge: decide before the file name is chosen (nothing is written yet)
+  chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+    takeOver(item).then((taken) => { if (!taken) suggest(); }).catch(() => suggest());
+    return true; // we answer asynchronously
+  });
+} else {
+  // Firefox has no onDeterminingFilename: decide as soon as the download starts
+  chrome.downloads.onCreated.addListener((item) => {
+    const url = item.finalUrl || item.url || '';
+    let name = item.filename || '';
+    if (!name) { try { name = decodeURIComponent(new URL(url).pathname.split('/').pop() || ''); } catch {} }
+    takeOver({ ...item, filename: name }).catch(() => {});
+  });
+}
 
 async function takeOver(item) {
   const c = await cfg();

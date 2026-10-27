@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en" data-lang="__MDM_LANG__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download File Info</title>
+<link rel="icon" href="/favicon.ico">
+<script>
+  // Same theme as the main window (saved by its 🌓 button), applied before the first paint.
+  try { const t = localStorage.getItem('mdm.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+</script>
+<script src="/i18n.js"></script>
+<style>
+  /* "Download File Info": the window that opens when a download link is caught.
+     Layout follows the classic download-manager dialog (URL, category, Save As, description,
+     file card, connections), colours are Mechano DM's own (v2 theme tokens). */
+  :root {
+    color-scheme: light;
+    --bg: #f3f4f6; --panel: #ffffff; --raised: #f7f8fa; --text: #1f2328; --muted: #656d76;
+    --line: #e2e5e9; --line-strong: #cdd2d8; --accent: #1f5bd8; --accent-2: #174ab3; --accent-soft: #e8effc;
+    --ok: #1f9d55; --warn: #9a6700; --warn-soft: #fff6e0; --err: #cf222e; --on-accent: #fff;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #101214; --panel: #181b1f; --raised: #1f2328; --text: #e6e8eb; --muted: #959ca5;
+    --line: #2a2f35; --line-strong: #3a4047; --accent: #5b8def; --accent-2: #7ba4f3; --accent-soft: #1c2a44;
+    --ok: #3fb96a; --warn: #d29922; --warn-soft: #2b2414; --err: #f2575f; --on-accent: #0d131a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #101214; --panel: #181b1f; --raised: #1f2328; --text: #e6e8eb; --muted: #959ca5;
+      --line: #2a2f35; --line-strong: #3a4047; --accent: #5b8def; --accent-2: #7ba4f3; --accent-soft: #1c2a44;
+      --ok: #3fb96a; --warn: #d29922; --warn-soft: #2b2414; --err: #f2575f; --on-accent: #0d131a;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--panel); color: var(--text); display: flex; flex-direction: column;
+    font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; font-variant-numeric: tabular-nums; overflow: hidden; }
+  :root[dir="rtl"] body { font-family: "Segoe UI Variable Text", "Segoe UI", Tahoma, system-ui, sans-serif; }
+  input, select, button, textarea { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+  /* header */
+  .head { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  .head img { width: 26px; height: 26px; }
+  .head h1 { margin: 0; font: 600 15px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; }
+  .head .count { margin-inline-start: auto; font-size: 12px; color: var(--muted); background: var(--raised); border: 1px solid var(--line);
+    border-radius: 99px; padding: 2px 10px; }
+  .head .count:empty { display: none; }
+
+  /* body: file card + form */
+  .body { flex: 1; display: grid; grid-template-columns: 148px 1fr; gap: 16px; padding: 16px 18px 12px; min-height: 0; overflow: auto; }
+  .card { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 10px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--raised); text-align: center; align-self: start; }
+  .type-icon { width: 76px; height: 92px; display: block; }
+  .thumb { width: 124px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); display: block; background: var(--line); }
+  .size { font: 600 16px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; }
+  .size.unknown { font-size: 13px; color: var(--muted); font-weight: 400; }
+  .facts { list-style: none; margin: 0; padding: 0; font-size: 11.5px; color: var(--muted); display: grid; gap: 2px; width: 100%; }
+  .facts li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .facts .yes { color: var(--ok); } .facts .no { color: var(--warn); }
+
+  .form { display: grid; grid-template-columns: auto 1fr; gap: 9px 10px; align-content: start; min-width: 0; }
+  .form > label { font-size: 12.5px; color: var(--muted); align-self: center; white-space: nowrap; }
+  .line { display: flex; gap: 6px; min-width: 0; align-items: center; }
+  .line > * { min-width: 0; }
+  .grow { flex: 1; }
+  input[type=text], input[type=number], select { height: 32px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 0 9px; width: 100%; }
+  input[readonly] { background: var(--raised); color: var(--muted); }
+  input:hover:not([readonly]), select:hover { border-color: var(--line-strong); }
+  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+  .ltr { direction: ltr; text-align: left; }
+  :root[dir="rtl"] .ltr { text-align: right; unicode-bidi: plaintext; }
+  #saveAs { font-family: inherit; }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); cursor: pointer; user-select: none; }
+  .sub { grid-column: 2; margin-top: -3px; }
+  button { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; height: 32px; padding: 0 14px; cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: var(--line-strong); background: var(--raised); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.icon { width: 34px; padding: 0; display: grid; place-items: center; flex: none; color: var(--muted); }
+  button.icon:hover { color: var(--accent); }
+  button.icon svg { width: 16px; height: 16px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+  button.primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
+  .conn { display: flex; align-items: center; gap: 6px; }
+  .conn input { width: 64px; text-align: center; }
+  .hint { font-size: 11.5px; color: var(--muted); }
+
+  /* info / warning bar */
+  .note { margin: 0 18px 10px; padding: 8px 12px; border-radius: 8px; font-size: 12.5px; display: flex; gap: 8px; align-items: flex-start;
+    background: var(--accent-soft); color: var(--text); border: 1px solid transparent; }
+  .note.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+  .note.err { background: color-mix(in srgb, var(--err) 12%, transparent); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
+  .note[hidden] { display: none; }
+  .note svg { width: 16px; height: 16px; flex: none; margin-top: 1px; }
+  .note.warn svg { color: var(--warn); } .note.err svg { color: var(--err); } .note:not(.warn):not(.err) svg { color: var(--accent); }
+
+  /* loading shimmer on the name while yt-dlp reads the page */
+  .loading { position: relative; color: transparent !important; }
+  .loading::after { content: ''; position: absolute; inset: 7px 9px; border-radius: 4px;
+    background: linear-gradient(90deg, var(--line), var(--raised), var(--line)); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+
+  /* footer */
+  .foot { display: flex; align-items: center; gap: 8px; padding: 11px 18px; border-top: 1px solid var(--line); background: var(--raised); flex-wrap: wrap; }
+  .foot .spacer { flex: 1; }
+
+  @media (max-width: 560px) {
+    .body { grid-template-columns: 1fr; }
+    .card { flex-direction: row; justify-content: flex-start; text-align: start; }
+    .type-icon { width: 44px; height: 54px; } .thumb { width: 96px; }
+    .form { grid-template-columns: 1fr; } .sub { grid-column: 1; }
+  }
+</style>
+</head>
+<body>
+<div class="head">
+  <img src="/logo.png?v=2" alt="">
+  <h1>Download File Info</h1>
+  <span class="count" id="count"></span>
+</div>
+
+<div class="body">
+  <aside class="card" aria-label="File">
+    <img class="thumb" id="thumb" alt="" hidden referrerpolicy="no-referrer">
+    <svg class="type-icon" id="typeIcon" viewBox="0 0 76 92" aria-hidden="true">
+      <path d="M6 2h46l22 22v62a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4z" fill="var(--panel)" stroke="var(--line-strong)" stroke-width="2"/>
+      <path d="M52 2v18a4 4 0 0 0 4 4h18" fill="var(--raised)" stroke="var(--line-strong)" stroke-width="2"/>
+      <rect id="tiBand" x="2" y="50" width="54" height="24" rx="3" fill="var(--accent)"/>
+      <text id="tiText" x="29" y="67" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" font-weight="700" fill="#fff">FILE</text>
+    </svg>
+    <div class="size unknown" id="size" dir="ltr">…</div>
+    <ul class="facts" id="facts"></ul>
+  </aside>
+
+  <form class="form" id="form" autocomplete="off" onsubmit="return false">
+    <label for="url">URL</label>
+    <div class="line">
+      <input type="text" id="url" class="grow ltr" readonly translate="no" spellcheck="false">
+      <button type="button" class="icon" id="copyUrl" title="Copy link" aria-label="Copy link">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+      </button>
+    </div>
+
+    <label for="category">Category</label>
+    <div class="line">
+      <select id="category" class="grow"></select>
+      <span id="qualityWrap" class="line grow" hidden>
+        <label for="quality" class="hint">Quality</label>
+        <select id="quality" class="grow"></select>
+      </span>
+    </div>
+
+    <label for="saveAs">Save As</label>
+    <div class="line">
+      <input type="text" id="saveAs" class="grow ltr loading" translate="no" spellcheck="false">
+      <button type="button" class="icon" id="browse" title="Choose folder" aria-label="Choose folder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      </button>
+    </div>
+    <label class="check sub"><input type="checkbox" id="remember"> <span id="rememberText">Remember this path for "General" category</span></label>
+
+    <label for="desc">Description</label>
+    <input type="text" id="desc" maxlength="500" placeholder="Optional note for this download">
+
+    <label for="conn" id="connLabel">Connections</label>
+    <div class="conn" id="connRow">
+      <input type="number" id="conn" min="1" max="32" value="8">
+      <span class="hint" id="connHint">parts downloaded at the same time</span>
+    </div>
+  </form>
+</div>
+
+<div class="note" id="note" role="status" hidden>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.5"/></svg>
+  <span id="noteText"></span>
+</div>
+
+<div class="foot">
+  <label class="check"><input type="checkbox" id="dontAsk"> Don't ask again</label>
+  <span class="spacer"></span>
+  <button type="button" id="cancel">Cancel</button>
+  <button type="button" id="later">Download Later</button>
+  <button type="button" class="primary" id="start">Start Download</button>
+</div>
+
+<script>
+'use strict';
+const TOKEN = '__MDM_TOKEN__';
+const $ = (s) => document.querySelector(s);
+const T = (s) => (window.MDM_I18N ? MDM_I18N.t(s) : s);
+const params = new URLSearchParams(location.search);
+const hostView = !!(window.chrome && window.chrome.webview);   // own window inside Mechano DM.exe
+const framed = !hostView && window.parent !== window;            // iframe in the main page
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? { headers: { 'x-mdm-token': TOKEN } } :
+    { method: 'POST', headers: { 'content-type': 'application/json', 'x-mdm-token': TOKEN }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+const fmtBytes = (n) => { if (!n || !isFinite(n)) return ''; const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return n.toFixed(i > 1 ? 2 : 0) + ' ' + u[i]; };
+const fmtTime = (s) => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
+
+// ---------------------------------------------------------------- talking to whoever shows this page
+function tellHost(msg) {
+  if (hostView) window.chrome.webview.postMessage(msg);
+  else if (framed) window.parent.postMessage({ mdm: 'dialog', ...msg }, location.origin);
+}
+function finished() {
+  if (hostView || framed) tellHost({ type: 'done' });
+  else window.close();
+}
+// Title bar colour of the app window follows the page theme
+function themeIsDark() {
+  const t = document.documentElement.dataset.theme;
+  return t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+}
+tellHost({ type: 'theme', dark: themeIsDark() });
+
+// Folder picker: the app window opens Windows' own dialog; elsewhere the engine does it.
+let pickResolve = null;
+if (hostView) {
+  window.chrome.webview.addEventListener('message', (e) => {
+    const m = e.data || {};
+    if (m.type === 'folder' && pickResolve) { pickResolve(m.path || null); pickResolve = null; }
+  });
+}
+function pickFolder(start) {
+  if (hostView) return new Promise((r) => { pickResolve = r; tellHost({ type: 'browse', start }); });
+  return api('/api/pick-folder', { start }).then((r) => r.path);
+}
+
+// ---------------------------------------------------------------- state
+const CAT_COLORS = { Video: '#7c4dff', Music: '#1f9d55', Compressed: '#b26a00', Documents: '#1f5bd8', Programs: '#cf222e', Images: '#0e8a9a', General: '#656d76' };
+let job = null, d = null, busy = false;
+let folderAuto = '';      // folder we filled in ourselves (follows the category until you edit it)
+let nameAuto = '';
+
+function splitPath(p) {
+  const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'));
+  return i < 0 ? { dir: '', name: p } : { dir: p.slice(0, i) || p.slice(0, i + 1), name: p.slice(i + 1) };
+}
+function joinPath(dir, name) { return dir ? dir.replace(/[\\/]+$/, '') + '\\' + name : name; }
+function current() { return splitPath($('#saveAs').value.trim()); }
+
+function setNote(text, kind) {
+  $('#note').hidden = !text;
+  $('#note').className = 'note' + (kind ? ' ' + kind : '');
+  $('#noteText').textContent = text ? T(text) : '';
+}
+function setBusy(b) {
+  busy = b;
+  for (const id of ['#start', '#later', '#browse']) $(id).disabled = b;
+}
+function setRememberText() {
+  $('#rememberText').textContent = T(`Remember this path for "${$('#category').value}" category`);
+}
+
+function drawType(ext, cat) {
+  const label = (ext || '').toUpperCase().slice(0, 5) || T('FILE');
+  $('#tiText').textContent = label;
+  $('#tiText').setAttribute('font-size', label.length > 4 ? 11 : 13);
+  $('#tiBand').setAttribute('fill', CAT_COLORS[cat] || CAT_COLORS.General);
+}
+
+function fillFacts() {
+  const li = [];
+  const kind = d.playlist ? 'Playlist' : { direct: 'File', hls: 'Stream', ytdlp: 'Video site', torrent: 'Torrent' }[d.kind] || d.kind;
+  li.push(`<li>${esc(T(kind))}${d.site ? ' · <span translate="no">' + esc(d.site) + '</span>' : ''}</li>`);
+  if (d.duration) li.push(`<li>${esc(T('Length'))}: ${fmtTime(d.duration)}</li>`);
+  if (d.resumable != null) li.push(`<li class="${d.resumable ? 'yes' : 'no'}">${esc(T(d.resumable ? 'Resume: Yes' : 'Resume: No'))}</li>`);
+  $('#facts').innerHTML = li.join('');
+}
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function showSize(n) {
+  $('#size').textContent = n ? fmtBytes(n) : T('Size unknown');
+  $('#size').classList.toggle('unknown', !n);
+}
+
+// ---------------------------------------------------------------- load
+async function pickJob() {
+  const list = (await api('/api/jobs')).filter((j) => j.status === 'confirm').sort((a, b) => a.createdAt - b.createdAt);
+  const want = params.get('id');
+  const j = want ? list.find((x) => x.id === want) : list[0];
+  const pos = j ? list.indexOf(j) : -1;
+  $('#count').textContent = list.length > 1 ? T(`${pos + 1} of ${list.length}`) : '';
+  return j || null;
+}
+
+async function load() {
+  setBusy(true);
+  try { job = await pickJob(); } catch (e) { setNote(e.message, 'err'); return; }
+  if (!job) { setNote('This download was already handled.', 'warn'); setTimeout(finished, 1200); return; }
+  $('#url').value = job.url;
+  $('#url').title = job.url;
+  $('#saveAs').value = job.filename || '';
+  $('#category').innerHTML = `<option>${esc(T('General'))}</option>`; // real list arrives with the details
+  showSize(job.total);
+  drawType((job.filename || '').split('.').pop(), 'General');
+  try {
+    d = await api(`/api/jobs/${job.id}/details`, {});
+  } catch (e) {
+    $('#saveAs').classList.remove('loading');
+    setNote(e.message, 'warn');
+    setBusy(false);
+    return;
+  }
+  $('#saveAs').classList.remove('loading');
+  // categories
+  const cat = $('#category');
+  cat.innerHTML = '';
+  for (const c of d.categories || []) {
+    const o = document.createElement('option');
+    o.value = c; o.textContent = T(c);
+    cat.appendChild(o);
+  }
+  cat.value = d.category;
+  // qualities (video sites)
+  const q = $('#quality');
+  q.innerHTML = '';
+  for (const o of d.qualities || []) {
+    const opt = document.createElement('option');
+    opt.value = o.value;
+    opt.textContent = T(o.label) + (o.size ? `  (${fmtBytes(o.size)})` : '');
+    if (o.value === d.selected) opt.selected = true;
+    q.appendChild(opt);
+  }
+  $('#qualityWrap').hidden = !(d.qualities && d.qualities.length);
+  // Save As
+  folderAuto = d.folder;
+  nameAuto = d.fileName || d.name;
+  $('#saveAs').value = d.playlist ? d.folder : joinPath(d.folder, nameAuto);
+  $('#saveAs').title = d.playlist ? T('Playlist videos are saved in a folder here') : '';
+  $('#remember').checked = (d.remembered || []).includes(d.category);
+  setRememberText();
+  $('#desc').value = d.description || '';
+  $('#conn').value = d.connections || 8;
+  const noConn = d.kind === 'torrent';
+  $('#connLabel').hidden = $('#connRow').hidden = noConn;
+  if (d.thumbnail) { $('#thumb').src = d.thumbnail; $('#thumb').hidden = false; $('#typeIcon').style.display = 'none'; }
+  drawType(d.ext, d.category);
+  showSize(selectedSize() || d.size);
+  fillFacts();
+  if (d.note) setNote(d.note, 'warn');
+  else if (d.playlist) setNote('Playlist: every video is downloaded one after another. You can skip or re-order them in the main window.');
+  setBusy(false);
+  $('#start').focus();
+}
+
+function selectedSize() {
+  if (!d || !d.qualities) return 0;
+  const v = $('#quality').value;
+  // "Best": the biggest video choice is what will be downloaded
+  if (v === 'best') return Math.max(0, ...d.qualities.filter((x) => x.value !== 'audio' && x.size).map((x) => x.size));
+  const o = d.qualities.find((x) => x.value === v);
+  return o && o.size;
+}
+
+// ---------------------------------------------------------------- reactions
+// Category → its folder, unless you typed your own folder.
+$('#category').addEventListener('change', () => {
+  const c = $('#category').value;
+  const cur = current();
+  if (d && (cur.dir === folderAuto || !cur.dir)) {
+    folderAuto = d.categoryDirs[c];
+    $('#saveAs').value = d.playlist ? folderAuto : joinPath(folderAuto, cur.name || nameAuto);
+  }
+  $('#remember').checked = d ? (d.remembered || []).includes(c) : false;
+  setRememberText();
+  drawType(d && d.ext, c);
+});
+
+// Quality: audio → .mp3 in Music, video → .mp4 in Video
+$('#quality').addEventListener('change', () => {
+  if (!d) return;
+  const audio = $('#quality').value === 'audio';
+  const cur = current();
+  if (!d.playlist && cur.name) {
+    const name = cur.name.replace(/\.(mp4|mp3)$/i, '') + (audio ? '.mp3' : '.mp4');
+    $('#saveAs').value = joinPath(cur.dir, name);
+  }
+  const autoCat = audio ? 'Music' : 'Video';
+  if ($('#category').value === 'Music' || $('#category').value === 'Video') {
+    $('#category').value = autoCat;
+    $('#category').dispatchEvent(new Event('change'));
+  }
+  d.ext = audio ? 'mp3' : 'mp4';
+  drawType(d.ext, $('#category').value);
+  showSize(selectedSize() || d.size);
+});
+
+$('#browse').addEventListener('click', async () => {
+  setBusy(true);
+  try {
+    const cur = current();
+    const p = await pickFolder(cur.dir || (d && d.folder) || '');
+    if (p) $('#saveAs').value = d && d.playlist ? p : joinPath(p, cur.name || nameAuto);
+  } catch (e) { setNote(e.message, 'err'); }
+  setBusy(false);
+  $('#saveAs').focus();
+});
+
+$('#copyUrl').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('#url').value); setNote('Link copied.'); }
+  catch { $('#url').select(); document.execCommand('copy'); }
+});
+
+// ---------------------------------------------------------------- finish
+async function finish(action) {
+  if (busy || !job) return;
+  setBusy(true);
+  try {
+    if ($('#dontAsk').checked) await api('/api/config', { confirmDownloads: false });
+    if (action === 'cancel') {
+      await api(`/api/jobs/${job.id}/remove`, { deleteFiles: false });
+    } else {
+      const raw = $('#saveAs').value.trim();
+      const body = { later: action === 'later', category: $('#category').value || undefined, description: $('#desc').value.trim() };
+      if (raw) {
+        const p = d && d.playlist ? { dir: raw, name: '' } : splitPath(raw);
+        if (!/^([a-zA-Z]:[\\/]|\\\\)/.test(p.dir + '\\')) throw new Error('Save As needs a full path, like D:\\Downloads\\file.zip');
+        body.dir = p.dir;
+        if (p.name && p.name !== nameAuto) body.filename = p.name;
+        body.rememberPath = $('#remember').checked;
+      }
+      if (!$('#qualityWrap').hidden) body.quality = $('#quality').value;
+      const n = Number($('#conn').value);
+      if (!$('#connRow').hidden && n >= 1 && n <= 32 && (!d || n !== d.connections)) body.connections = n;
+      await api(`/api/jobs/${job.id}/confirm`, body);
+    }
+    finished();
+  } catch (e) {
+    setBusy(false);
+    setNote(e.message, 'err');
+  }
+}
+$('#start').addEventListener('click', () => finish('start'));
+$('#later').addEventListener('click', () => finish('later'));
+$('#cancel').addEventListener('click', () => finish('cancel'));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); finish('cancel'); }
+  else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON' && e.target.tagName !== 'SELECT') { e.preventDefault(); finish('start'); }
+});
+
+load();
+</script>
+</body>
+</html>
