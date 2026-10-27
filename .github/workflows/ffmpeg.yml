@@ -18,8 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Tools
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
+          # the runner's Azure mirror can be very slow: use the main Ubuntu mirrors
+          echo -e "http://archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://mirrors.edge.kernel.org/ubuntu/\tpriority:2" | sudo tee /etc/apt/apt-mirrors.txt
           sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64 make pkg-config
       - name: Build
