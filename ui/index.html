@@ -369,6 +369,33 @@
     .job { grid-template-columns: 1fr; } .actions { justify-content: flex-start; }
     #addForm button { flex: 1 1 auto; }
   }
+
+  /* bottom bar: "Support" on the left, version on the right */
+  main { padding-bottom: 64px; }
+  .appbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; height: 34px; display: flex; align-items: center; gap: 10px;
+    padding: 0 14px; background: var(--panel); border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); direction: ltr; }
+  .appbar .spacer { flex: 1; }
+  .appbar a { color: var(--muted); text-decoration: none; }
+  .appbar a:hover { color: var(--accent); }
+  .support-btn { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 99px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--raised); color: var(--text); font: 600 12px/1 inherit; }
+  .support-btn svg { width: 14px; height: 14px; color: #e0465a; }
+  .support-btn:hover, .support-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+  .support-pop { position: fixed; left: 12px; bottom: 42px; z-index: 31; width: 300px; max-width: calc(100vw - 24px); padding: 14px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--pop); font-size: 13px; }
+  .support-pop[hidden], .appbar [hidden], .support-pop [hidden] { display: none !important; }
+  .support-pop h3 { margin: 0 0 4px; font-size: 14px; }
+  .support-pop p { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; }
+  .pay { border: 1px solid var(--line); border-radius: 9px; padding: 10px; background: var(--raised); display: grid; gap: 8px; }
+  .pay + .pay { margin-top: 8px; }
+  .pay-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .pay-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .pay-id { display: flex; gap: 6px; align-items: center; }
+  .pay-id code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: ltr; text-align: left;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: 12px Consolas, monospace; }
+  .pay a.button { display: block; text-align: center; padding: 6px 10px; border-radius: 7px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; }
+  :root[data-theme="dark"] .pay a.button { color: #0d131a; }
+  .pay a.button:hover { background: var(--accent-2); }
 </style>
 </head>
 <body>
@@ -584,6 +611,29 @@
   </section>
 
 </main>
+
+<footer class="appbar">
+  <button type="button" class="support-btn" id="supportBtn" aria-expanded="false" aria-controls="supportPop" hidden>
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.6-9.6-9.2C.9 8.5 3 5 6.4 5c2 0 3.6 1.2 4.4 2.7h2.4C14 6.2 15.6 5 17.6 5 21 5 23.1 8.5 21.6 11.8 19.5 16.4 12 21 12 21z"/></svg>
+    <span>Support</span>
+  </button>
+  <span class="spacer"></span>
+  <span id="appVersion" translate="no"></span>
+  <a href="https://github.com/Mechano0/mechano-download-manager" target="_blank" rel="noopener" translate="no">GitHub</a>
+</footer>
+<div class="support-pop" id="supportPop" role="dialog" aria-label="Support Mechano DM" hidden>
+  <h3>Support Mechano DM</h3>
+  <p>Mechano DM is free. If it helps you, you can support its development:</p>
+  <div class="pay" id="payPayoneer" hidden>
+    <div class="pay-head"><span class="pay-dot" style="background:#ff4800"></span><span translate="no">Payoneer</span></div>
+    <a class="button" id="payoneerLink" href="#" target="_blank" rel="noopener">Send with Payoneer</a>
+  </div>
+  <div class="pay" id="payInstapay" hidden>
+    <div class="pay-head"><span class="pay-dot" style="background:#6a2c91"></span><span translate="no">InstaPay</span></div>
+    <div class="pay-id" id="instapayIdRow"><code id="instapayId" translate="no"></code><button type="button" class="small" id="instapayCopy">Copy</button></div>
+    <a class="button" id="instapayLink" href="#" target="_blank" rel="noopener" hidden>Open InstaPay</a>
+  </div>
+</div>
 
 <script>
 const TOKEN = '__MDM_TOKEN__';
@@ -1339,6 +1389,36 @@ loadConfig().catch(() => {});
 setListCollapsed(store.get('mdm.listCollapsed') !== '0'); // collapsed (4 rows) unless the user opened it
 connect();
 window.addEventListener('resize', schedule);
+
+// ---------------------------------------------------------------- Support (bottom-left)
+// Fill these in to show them; an empty one is hidden, and the Support button only shows when one is set.
+const SUPPORT = {
+  payoneer: '',       // Payoneer payment-request link, e.g. https://link.payoneer.com/Token?t=...
+  instapay: 'islam.abdo10@instapay', // InstaPay address, e.g. name@instapay
+  instapayLink: 'https://ipn.eg/S/islam.abdo10/instapay/6qIPKT', // optional InstaPay link, e.g. https://ipn.eg/S/name/instapay/...
+};
+function setupSupport() {
+  const https = (u) => /^https:\/\/\S+$/.test(u || '');
+  const hasPay = https(SUPPORT.payoneer), hasInsta = !!(SUPPORT.instapay || https(SUPPORT.instapayLink));
+  $('#payPayoneer').hidden = !hasPay;
+  if (hasPay) $('#payoneerLink').href = SUPPORT.payoneer;
+  $('#payInstapay').hidden = !hasInsta;
+  $('#instapayIdRow').hidden = !SUPPORT.instapay;
+  $('#instapayId').textContent = SUPPORT.instapay;
+  $('#instapayLink').hidden = !https(SUPPORT.instapayLink);
+  if (https(SUPPORT.instapayLink)) $('#instapayLink').href = SUPPORT.instapayLink;
+  $('#supportBtn').hidden = !(hasPay || hasInsta);
+  const toggle = (open) => { $('#supportPop').hidden = !open; $('#supportBtn').setAttribute('aria-expanded', String(open)); };
+  $('#supportBtn').addEventListener('click', (e) => { e.stopPropagation(); toggle($('#supportPop').hidden); });
+  document.addEventListener('click', (e) => { if (!$('#supportPop').hidden && !$('#supportPop').contains(e.target)) toggle(false); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggle(false); });
+  $('#instapayCopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(SUPPORT.instapay); showToast(T('InstaPay address copied.')); }
+    catch { showToast(SUPPORT.instapay); }
+  });
+  api('/api/app-update').then((s) => { if (s.current) $('#appVersion').textContent = 'Mechano DM v' + s.current; }).catch(() => {});
+}
+setupSupport();
 </script>
 </body>
 </html>
