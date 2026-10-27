@@ -12,10 +12,16 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/checkout@v4
       - name: Tools
-        run: sudo apt-get update && sudo apt-get install -y mingw-w64 make pkg-config
+        timeout-minutes: 10
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64 make pkg-config
       - name: Build
         run: bash tools/ffmpeg/build.sh
       - uses: actions/upload-artifact@v4
@@ -26,6 +32,7 @@ jobs:
   check:
     needs: build
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/download-artifact@v4
         with:
