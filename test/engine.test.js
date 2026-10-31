@@ -1,4 +1,5 @@
 'use strict';
+process.env.MDM_NO_SCAN = '1'; // no real Microsoft Defender scans during tests
 // Offline tests: every server here is local, so nothing is fetched from the internet.
 const test = require('node:test');
 const assert = require('node:assert/strict');

@@ -165,7 +165,7 @@ class HlsDownload extends EventEmitter {
       await fsp.mkdir(o.dir, { recursive: true });
       let name = o.filename || filenameFromUrl(o.url) || 'video';
       name = sanitizeFilename(name.replace(/\.m3u8?$/i, '')) + (fmp4 ? '.mp4' : '.ts');
-      o.target = uniquePath(o.dir, name);
+      o.target = o.overwrite ? path.join(o.dir, name) : uniquePath(o.dir, name);
     }
     this.target = o.target;
     // pieces wait in the job's work folder (old jobs: next to the file), not in the save folder
@@ -246,15 +246,19 @@ class HlsDownload extends EventEmitter {
     return outPath;
   }
 
+  /** Output name: the same one when replacing (ffmpeg -y overwrites), else a free one. */
+  pick(dir, name) { return this.o.overwrite ? path.join(dir, name) : uniquePath(dir, name); }
+
   async finalize(tmp) {
     const ff = this.o.ffmpeg;
     if (ff && this.target.endsWith('.ts') && this.o.remux !== false) {
-      const mp4 = uniquePath(path.dirname(this.target), path.basename(this.target, '.ts') + '.mp4');
+      const mp4 = this.pick(path.dirname(this.target), path.basename(this.target, '.ts') + '.mp4');
       if (await runFfmpeg(ff, ['-y', '-i', tmp, '-c', 'copy', '-bsf:a', 'aac_adtstoasc', mp4])) {
         await fsp.rm(tmp, { force: true });
         return mp4;
       }
     }
+    if (this.o.overwrite) await fsp.rm(this.target, { force: true });
     await fsp.rename(tmp, this.target);
     return this.target;
   }
@@ -263,7 +267,7 @@ class HlsDownload extends EventEmitter {
     const ff = this.o.ffmpeg;
     const base = path.basename(this.target, path.extname(this.target));
     if (ff) {
-      const out = uniquePath(path.dirname(this.target), base + '.mp4');
+      const out = this.pick(path.dirname(this.target), base + '.mp4');
       if (await runFfmpeg(ff, ['-y', '-i', v, '-i', a, '-map', '0:v:0', '-map', '1:a:0', '-c', 'copy', out])) {
         await fsp.rm(v, { force: true });
         await fsp.rm(a, { force: true });

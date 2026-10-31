@@ -1,4 +1,5 @@
 'use strict';
+process.env.MDM_NO_SCAN = '1'; // no real Microsoft Defender scans during tests
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');

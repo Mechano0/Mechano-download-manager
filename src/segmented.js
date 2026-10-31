@@ -71,7 +71,8 @@ class SegmentedDownload extends EventEmitter {
       let prior = null;
       const priorState = o.workDir ? path.join(o.workDir, name + '.mdmpart.json') : same + '.mdmpart.json';
       try { prior = JSON.parse(fs.readFileSync(priorState, 'utf8')); } catch { /* none */ }
-      o.target = prior && prior.url === o.url ? same : uniquePath(o.dir, name);
+      // "Replace" (the user chose it): same name; otherwise "file (1).zip" when the name is taken
+      o.target = (prior && prior.url === o.url) || o.overwrite ? same : uniquePath(o.dir, name);
     }
     this.target = o.target;
     // Unfinished data lives in the job's work folder (inside Mechano DM), so the save folder only
@@ -142,7 +143,10 @@ class SegmentedDownload extends EventEmitter {
     if (this.single) await this.fh.truncate(this.downloaded);
     await this.fh.close();
     let finalPath = this.target;
-    if (fs.existsSync(finalPath)) finalPath = uniquePath(path.dirname(finalPath), path.basename(finalPath));
+    if (fs.existsSync(finalPath)) {
+      if (this.o.overwrite) await fsp.rm(finalPath, { force: true }); // the old file goes only now, when the new one is complete
+      else finalPath = uniquePath(path.dirname(finalPath), path.basename(finalPath));
+    }
     await fsp.mkdir(path.dirname(finalPath), { recursive: true });
     await moveFile(this.part, finalPath);
     await this.clearState();

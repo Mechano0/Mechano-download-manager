@@ -44,7 +44,7 @@ using Microsoft.Web.WebView2.WinForms;
 
 static class Program
 {
-    public const string AppId = "Mechano.DownloadManager";
+    public const string AppId = ShellProps.AppId;
     public const string Title = "Mechano Download Manager";
     public static string Dir;
 
@@ -64,6 +64,13 @@ static class Program
         Native.SetCurrentProcessExplicitAppUserModelID(AppId); // own taskbar button + pin target
 
         bool background = args.Any(a => a.Equals("-Background", StringComparison.OrdinalIgnoreCase));
+        // Restart button: the new copy waits until the old one has closed (it holds the mutex and the engine port).
+        int wait = Array.FindIndex(args, a => a.Equals("-WaitPid", StringComparison.OrdinalIgnoreCase));
+        int oldPid;
+        if (wait >= 0 && wait + 1 < args.Length && int.TryParse(args[wait + 1], out oldPid))
+        {
+            try { using (var old = Process.GetProcessById(oldPid)) old.WaitForExit(20000); } catch { /* already gone */ }
+        }
         bool created;
         var mutex = new Mutex(true, @"Local\MechanoDM.Host", out created);
         if (!created)
@@ -80,10 +87,31 @@ static class Program
     [MethodImpl(MethodImplOptions.NoInlining)]
     static int Run(bool background)
     {
+        Task.Run(() => FixShortcuts());
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         Application.Run(new Host(background));
         return 0;
+    }
+
+    /** Older installs made shortcuts without the taskbar ID (blank taskbar icon): add it. */
+    static void FixShortcuts()
+    {
+        foreach (var folder in new[] { Environment.SpecialFolder.Programs, Environment.SpecialFolder.DesktopDirectory })
+        {
+            try
+            {
+                string lnk = Path.Combine(Environment.GetFolderPath(folder), "Mechano Download Manager.lnk");
+                if (File.Exists(lnk)) ShellProps.StampShortcut(lnk);
+            }
+            catch (Exception ex) { Log("shortcut taskbar ID: " + ex.Message); }
+        }
+    }
+
+    /** Gives a window the app's taskbar ID, icon and name. */
+    public static void StampWindow(Form f)
+    {
+        try { ShellProps.StampWindow(f.Handle, Application.ExecutablePath, Title); } catch (Exception ex) { Log("window taskbar ID: " + ex.Message); }
     }
 
     public static Icon AppIcon(int size)
@@ -225,7 +253,12 @@ class Host : ApplicationContext
     readonly ToolStripMenuItem miOpen = new ToolStripMenuItem("Open Mechano DM");
     readonly ToolStripMenuItem miFolder = new ToolStripMenuItem("Open downloads folder");
     readonly ToolStripMenuItem miExit = new ToolStripMenuItem("Exit");
+    readonly ToolStripMenuItem miRestart = new ToolStripMenuItem("Restart Mechano DM");
     readonly ToolStripMenuItem miHidden = new ToolStripMenuItem("Show download windows");
+    readonly ToolStripMenuItem miDrop = new ToolStripMenuItem("Drop box for links");
+    readonly Dictionary<string, string> lastScan = new Dictionary<string, string>();
+    DropForm drop;
+    bool completeSound = true, dropWanted;
     readonly List<WebConfirmForm> progressWindows = new List<WebConfirmForm>();
     bool toldAboutHidden;
     ClipboardWatcher clip;
@@ -273,10 +306,20 @@ class Host : ApplicationContext
             Task.Run(() => Try(() => api.Post("/api/config", "{\"clipboardMonitor\":" + (on ? "true" : "false") + "}")));
         };
         menu.Items.Add(miClipboard);
+        miDrop.Click += delegate
+        {
+            bool on = !miDrop.Checked;
+            dropWanted = on;
+            SetDrop(on);
+            Task.Run(() => Try(() => api.Post("/api/config", "{\"dropTarget\":" + (on ? "true" : "false") + "}")));
+        };
+        menu.Items.Add(miDrop);
         miCancel.Visible = false;
         miCancel.Click += delegate { Try(() => api.Post("/api/schedule/cancel-action", "{}")); tray.ShowBalloonTip(3000, Program.L("Cancelled", "تم الإلغاء"), Program.L("The computer will stay on.", "الكمبيوتر هيفضل شغال."), ToolTipIcon.Info); };
         menu.Items.Add(miCancel);
         menu.Items.Add(new ToolStripSeparator());
+        miRestart.Click += delegate { Restart(); };
+        menu.Items.Add(miRestart);
         miExit.Click += delegate { Exit(); };
         menu.Items.Add(miExit);
         tray.ContextMenuStrip = menu;
@@ -402,6 +445,8 @@ class Host : ApplicationContext
                     var c = api.Get("/api/config") as Dictionary<string, object>;
                     if (c != null && c.ContainsKey("showCompleteDialog")) showComplete = Convert.ToBoolean(c["showCompleteDialog"]);
                     if (c != null && c.ContainsKey("clipboardMonitor")) clipboardOn = Convert.ToBoolean(c["clipboardMonitor"]);
+                    if (c != null && c.ContainsKey("completeSound")) completeSound = Convert.ToBoolean(c["completeSound"]);
+                    if (c != null && c.ContainsKey("dropTarget")) dropWanted = Convert.ToBoolean(c["dropTarget"]);
                     var up = api.Get("/api/app-update") as Dictionary<string, object>;
                     string launch = Api.Str(up, "launch");
                     if (!string.IsNullOrEmpty(launch) && !updateStarted) invoker.BeginInvoke((Action)(() => RunAppUpdate(launch)));
@@ -438,7 +483,21 @@ class Host : ApplicationContext
                 string prev;
                 bool known = lastStatus.TryGetValue(id, out prev);
                 if (status == "confirm" && prev != "confirm" && !confirmQueue.Contains(id)) confirmQueue.Enqueue(id);
-                if (!first && known && prev != "done" && status == "done" && showComplete) ShowComplete(j);
+                if (!first && known && prev != "done" && status == "done")
+                {
+                    if (completeSound) PlayDoneSound();
+                    if (showComplete) ShowComplete(j);
+                    else tray.ShowBalloonTip(4000, Program.L("Download complete", "التحميل خلص"), Api.Str(j, "filename") ?? Api.Str(j, "url"), ToolTipIcon.Info);
+                }
+                // Windows Defender found something in a finished download: say so even when the window is closed.
+                var scan = j.ContainsKey("scan") ? j["scan"] as Dictionary<string, object> : null;
+                string scanState = Api.Str(scan, "state"), prevScan;
+                lastScan.TryGetValue(id, out prevScan);
+                if (!first && scanState == "threat" && prevScan != "threat")
+                    tray.ShowBalloonTip(15000, Program.L("Windows Defender found a threat", "ويندوز ديفندر لقى فيروس"),
+                        (Api.Str(j, "filename") ?? "") + "\n" + (Api.Str(scan, "detail") ?? "") + "\n" +
+                        Program.L("Defender has dealt with the file. Don't open it.", "ديفندر اتعامل مع الملف. ماتفتحوش."), ToolTipIcon.Warning);
+                if (scanState != null) lastScan[id] = scanState;
                 if (!first && known && prev != "error" && status == "error")
                     tray.ShowBalloonTip(6000, Program.L("Download failed", "التحميل فشل"), (Api.Str(j, "filename") ?? Api.Str(j, "url")) + "\n" + Api.Str(j, "error"), ToolTipIcon.Error);
                 if (status == "downloading") active++;
@@ -455,6 +514,7 @@ class Host : ApplicationContext
             string tip = active > 0 ? "Mechano DM - " + active + Program.L(" downloading", " بيتحمّل") : Program.Title;
             if (tray.Text != tip) tray.Text = tip;
             if (miClipboard.Checked != clipboardOn) miClipboard.Checked = clipboardOn;
+            if (dropWanted != (drop != null)) SetDrop(dropWanted);
             NextConfirm();
         }
         if (sched != null)
@@ -504,6 +564,9 @@ class Host : ApplicationContext
         miStartup.Text = Program.L("Start with Windows", "يشتغل مع ويندوز");
         miClipboard.Text = Program.L("Watch copied links", "راقب الروابط المنسوخة");
         miExit.Text = Program.L("Exit", "خروج");
+        miRestart.Text = Program.L("Restart Mechano DM", "أعد تشغيل Mechano DM");
+        miDrop.Text = Program.L("Drop box for links", "صندوق اسحب الروابط هنا");
+        if (drop != null) drop.ApplyLanguage();
         tray.ContextMenuStrip.RightToLeft = Program.Arabic ? RightToLeft.Yes : RightToLeft.No;
     }
 
@@ -585,6 +648,50 @@ class Host : ApplicationContext
         UpdateHiddenMenu();
     }
 
+    // ------------------------------------------------------------------ floating windows (one per download)
+    readonly Dictionary<string, FloatForm> floats = new Dictionary<string, FloatForm>();
+
+    void ShowFloat(string id)
+    {
+        FloatForm f;
+        if (floats.TryGetValue(id, out f) && !f.IsDisposed) { f.Show(); f.BringToTop(); return; }
+        f = new FloatForm(api, id, floats.Count);
+        floats[id] = f;
+        f.OpenMain += ShowMain;
+        f.FormClosed += delegate { FloatForm cur; if (floats.TryGetValue(id, out cur) && cur == f) floats.Remove(id); };
+        f.Show();
+    }
+
+    /** The small "drop links here" box (Settings → Drop box, or the tray menu). */
+    void SetDrop(bool on)
+    {
+        miDrop.Checked = on;
+        if (on && drop == null)
+        {
+            drop = new DropForm(api);
+            drop.OpenMain += ShowMain;
+            drop.HideRequested += delegate
+            {
+                dropWanted = false;
+                SetDrop(false);
+                Task.Run(() => Try(() => api.Post("/api/config", "{\"dropTarget\":false}")));
+            };
+            drop.Show();
+        }
+        else if (!on && drop != null) { var d = drop; drop = null; d.Close(); }
+    }
+
+    static void PlayDoneSound()
+    {
+        try
+        {
+            string wav = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), @"Media\Windows Notify System Generic.wav");
+            if (File.Exists(wav)) new System.Media.SoundPlayer(wav).Play();
+            else System.Media.SystemSounds.Asterisk.Play();
+        }
+        catch { }
+    }
+
     void ShowComplete(Dictionary<string, object> j)
     {
         Program.Log("showing Download complete window for " + Api.Str(j, "filename"));
@@ -605,6 +712,8 @@ class Host : ApplicationContext
         if (main == null || main.IsDisposed)
         {
             main = new MainForm(api.Base + "/");
+            main.FloatRequested += id => invoker.BeginInvoke((Action)(() => ShowFloat(id)));
+            main.RestartRequested += () => invoker.BeginInvoke((Action)Restart);
             main.FormClosing += delegate (object s, FormClosingEventArgs e)
             {
                 if (exiting || e.CloseReason == CloseReason.WindowsShutDown) return;
@@ -662,9 +771,24 @@ class Host : ApplicationContext
         foreach (var f in completes.ToArray()) f.Close();
         if (confirm != null) { confirm.Silent = true; confirm.Close(); }
         foreach (var w in progressWindows.ToArray()) { w.Silent = true; w.Close(); }
+        foreach (var fl in floats.Values.ToArray()) fl.Close();
+        if (drop != null) drop.Close();
         if (main != null) main.Close();
         try { if (engine != null && !engine.HasExited) engine.Kill(); } catch { }
         ExitThread();
+    }
+
+    /** Close everything and start Mechano DM again (running downloads continue after it). */
+    void Restart()
+    {
+        Program.Log("restart requested");
+        try
+        {
+            Process.Start(new ProcessStartInfo(Application.ExecutablePath, "-WaitPid " + Process.GetCurrentProcess().Id)
+            { WorkingDirectory = Program.Dir, UseShellExecute = false });
+        }
+        catch (Exception ex) { Program.Log("restart failed: " + ex.Message); return; }
+        Exit();
     }
 
     static void Try(Action a) { try { a(); } catch { } }
@@ -675,6 +799,10 @@ class MainForm : Form
 {
     readonly string url;
     WebView2 web;
+    /** The page's ⧉ Float button: show this download in a floating window. */
+    public event Action<string> FloatRequested;
+    /** The page's restart button. */
+    public event Action RestartRequested;
 
     public MainForm(string url)
     {
@@ -685,9 +813,9 @@ class MainForm : Form
         var area = Screen.PrimaryScreen.WorkingArea;
         Size = new Size(Math.Min(1180, area.Width - 60), Math.Min(820, area.Height - 60));
         MinimumSize = new Size(520, 420);
-        BackColor = Color.FromArgb(233, 237, 242);
+        BackColor = Color.FromArgb(245, 238, 223);
         Load += async delegate { await InitWeb(); };
-        HandleCreated += delegate { Native.UseDarkTitleBar(Handle, Native.SystemUsesDarkMode()); };
+        HandleCreated += delegate { Native.UseDarkTitleBar(Handle, Native.SystemUsesDarkMode()); Program.StampWindow(this); };
     }
 
     /** False when the page engine is gone (the window would be blank). */
@@ -712,6 +840,15 @@ class MainForm : Form
             // Links that try to open a new window go to the normal browser
             web.CoreWebView2.NewWindowRequested += delegate (object o, CoreWebView2NewWindowRequestedEventArgs e) { e.Handled = true; try { Process.Start(e.Uri); } catch { } };
             web.CoreWebView2.DocumentTitleChanged += delegate { Text = Program.Title; };
+            // The page asks for things only the app can do: "float" = a small always-on-top window for one download.
+            web.CoreWebView2.WebMessageReceived += delegate (object o, CoreWebView2WebMessageReceivedEventArgs e)
+            {
+                Dictionary<string, object> m = null;
+                try { m = new JavaScriptSerializer().DeserializeObject(e.WebMessageAsJson) as Dictionary<string, object>; } catch { }
+                string id = Api.Str(m, "id");
+                if (Api.Str(m, "type") == "float" && !string.IsNullOrEmpty(id) && FloatRequested != null) FloatRequested(id);
+                if (Api.Str(m, "type") == "restart" && RestartRequested != null) RestartRequested();
+            };
             // If the WebView2 engine stops (crash, sleep, GPU reset), start it again instead of showing a blank window.
             web.CoreWebView2.ProcessFailed += delegate (object o, CoreWebView2ProcessFailedEventArgs e)
             {
@@ -833,8 +970,8 @@ class WebConfirmForm : PopupForm, IConfirmWindow
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(660, 470);
         bool dark = Native.SystemUsesDarkMode();
-        BackColor = dark ? Color.FromArgb(24, 27, 31) : Color.White;
-        HandleCreated += delegate { Native.UseDarkTitleBar(Handle, dark); Native.RoundCorners(Handle); };
+        BackColor = dark ? Color.FromArgb(33, 26, 19) : Color.FromArgb(255, 251, 243);
+        HandleCreated += delegate { Native.UseDarkTitleBar(Handle, dark); Native.RoundCorners(Handle); Program.StampWindow(this); };
         FormClosing += delegate (object s, FormClosingEventArgs e)
         {
             // Closing with X = Cancel (but not when the app exits or the page already finished)
@@ -893,7 +1030,7 @@ class WebConfirmForm : PopupForm, IConfirmWindow
         {
             bool dark = m.ContainsKey("dark") && Convert.ToBoolean(m["dark"]);
             Native.UseDarkTitleBar(Handle, dark);
-            BackColor = dark ? Color.FromArgb(24, 27, 31) : Color.White;
+            BackColor = dark ? Color.FromArgb(33, 26, 19) : Color.FromArgb(255, 251, 243);
         }
         else if (type == "browse")
         {
@@ -941,6 +1078,269 @@ class WebConfirmForm : PopupForm, IConfirmWindow
             var cp = base.CreateParams;
             cp.ClassStyle |= 0x20000;                // CS_DROPSHADOW: a shadow without the Windows frame
             cp.Style |= 0x00020000 | 0x00080000;     // WS_MINIMIZEBOX | WS_SYSMENU: taskbar click minimizes / restores
+            return cp;
+        }
+    }
+}
+
+// ====================================================================== floating download window (WebView2)
+// ui/float.html: one download's progress in a small window that stays above every other window,
+// away from the main window (the ⧉ Float button in the list). Drag it anywhere; closing it does not stop the download.
+class FloatForm : PopupForm
+{
+    static CoreWebView2Environment env;
+    readonly Api api;
+    readonly string id;
+    readonly int index;
+    WebView2 web;
+    public event Action OpenMain;
+
+    public FloatForm(Api api, string id, int index)
+    {
+        this.api = api;
+        this.id = id;
+        this.index = index;
+        Text = "Mechano DM";
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        StartPosition = FormStartPosition.Manual;
+        ClientSize = new Size(380, 112);
+        BackColor = Native.SystemUsesDarkMode() ? Color.FromArgb(33, 26, 19) : Color.FromArgb(255, 251, 243);
+        HandleCreated += delegate { Native.RoundCorners(Handle); };
+        PerformAutoScale();
+        Place();
+        Load += async delegate { await InitWeb(); };
+    }
+
+    /** Bottom-right corner of the screen, stacked upwards when several are open. */
+    void Place()
+    {
+        var area = Screen.FromPoint(Cursor.Position).WorkingArea;
+        int step = Height + 10;
+        int top = area.Bottom - 16 - Height - (index % Math.Max(1, (area.Height - 32) / step)) * step;
+        Location = new Point(area.Right - Width - 16, Math.Max(area.Top, top));
+    }
+
+    async Task InitWeb()
+    {
+        try
+        {
+            web = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = BackColor };
+            Controls.Add(web);
+            if (env == null)
+            {
+                string data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"MechanoDM\webview");
+                env = await CoreWebView2Environment.CreateAsync(null, data);
+            }
+            await web.EnsureCoreWebView2Async(env);
+            var s = web.CoreWebView2.Settings;
+            s.AreDevToolsEnabled = false;
+            s.IsStatusBarEnabled = false;
+            s.AreDefaultContextMenusEnabled = false;
+            s.IsZoomControlEnabled = false;
+            web.CoreWebView2.NewWindowRequested += delegate (object o, CoreWebView2NewWindowRequestedEventArgs e) { e.Handled = true; };
+            web.CoreWebView2.WebMessageReceived += delegate (object o, CoreWebView2WebMessageReceivedEventArgs e) { OnMessage(e.WebMessageAsJson); };
+            web.Source = new Uri(api.Base + "/float.html?id=" + Uri.EscapeDataString(id));
+        }
+        catch (Exception ex)
+        {
+            Program.Log("floating window: WebView2 failed (" + ex.Message + ")");
+            BeginInvoke((Action)Close);
+        }
+    }
+
+    void OnMessage(string json)
+    {
+        Dictionary<string, object> m = null;
+        try { m = new JavaScriptSerializer().DeserializeObject(json) as Dictionary<string, object>; } catch { }
+        string type = Api.Str(m, "type");
+        if (type == "close") Close();
+        else if (type == "main") { if (OpenMain != null) OpenMain(); }
+        else if (type == "drag") { Native.ReleaseCapture(); Native.SendMessage(Handle, 0xA1 /* WM_NCLBUTTONDOWN */, (IntPtr)2 /* HTCAPTION */, IntPtr.Zero); }
+    }
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.ClassStyle |= 0x20000;   // CS_DROPSHADOW
+            cp.ExStyle |= 0x80;         // WS_EX_TOOLWINDOW: not in Alt+Tab or the taskbar
+            return cp;
+        }
+    }
+}
+
+// ====================================================================== drop box
+// A small box that stays above other windows: drag a link from the browser (or text with links) onto it
+// and the download starts. Drag the box to move it; right-click for the menu; double-click opens Mechano DM.
+class DropForm : Form
+{
+    readonly Api api;
+    readonly ContextMenuStrip menu = new ContextMenuStrip();
+    readonly ToolStripMenuItem miOpen = new ToolStripMenuItem(), miHide = new ToolStripMenuItem();
+    readonly System.Windows.Forms.Timer reset = new System.Windows.Forms.Timer { Interval = 1800 };
+    bool hover;
+    string flash; // "ok" / "err" for a moment after a drop
+    public event Action OpenMain, HideRequested;
+
+    static readonly Color Green = Color.FromArgb(46, 107, 76), GreenHot = Color.FromArgb(58, 132, 94);
+    static readonly Color Gold = Color.FromArgb(212, 162, 55), Cream = Color.FromArgb(255, 251, 243), Red = Color.FromArgb(178, 60, 40);
+    static string PosFile { get { return Path.Combine(Program.Dir, @"data\drop-box.txt"); } }
+
+    public DropForm(Api api)
+    {
+        this.api = api;
+        Text = "Mechano DM";
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        TopMost = true;
+        StartPosition = FormStartPosition.Manual;
+        Font = new Font("Segoe UI", 8.25f, FontStyle.Bold);
+        AutoScaleDimensions = new SizeF(96F, 96F);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(84, 84);
+        BackColor = Green;
+        Opacity = 0.94;
+        DoubleBuffered = true;
+        AllowDrop = true;
+        PerformAutoScale();
+        HandleCreated += delegate { Native.RoundCorners(Handle); };
+        Place();
+
+        miOpen.Click += delegate { if (OpenMain != null) OpenMain(); };
+        miHide.Click += delegate { if (HideRequested != null) HideRequested(); };
+        menu.Items.Add(miOpen);
+        menu.Items.Add(miHide);
+        ContextMenuStrip = menu;
+        ApplyLanguage();
+
+        reset.Tick += delegate { reset.Stop(); flash = null; Invalidate(); };
+        DragEnter += delegate (object s, DragEventArgs e)
+        {
+            bool ok = LinksFrom(e.Data).Count > 0;
+            e.Effect = !ok ? DragDropEffects.None : (e.AllowedEffect & DragDropEffects.Copy) != 0 ? DragDropEffects.Copy : DragDropEffects.Link;
+            hover = ok; Invalidate();
+        };
+        DragLeave += delegate { hover = false; Invalidate(); };
+        DragDrop += delegate (object s, DragEventArgs e) { hover = false; Add(LinksFrom(e.Data)); };
+        MouseDown += delegate (object s, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            if (e.Clicks == 2) { if (OpenMain != null) OpenMain(); return; }
+            Native.ReleaseCapture();
+            Native.SendMessage(Handle, 0xA1 /* WM_NCLBUTTONDOWN */, (IntPtr)2 /* HTCAPTION */, IntPtr.Zero);
+            SavePlace(); // SendMessage returns when the move ends
+        };
+        FormClosed += delegate { reset.Dispose(); };
+    }
+
+    public void ApplyLanguage()
+    {
+        miOpen.Text = Program.L("Open Mechano DM", "افتح Mechano DM");
+        miHide.Text = Program.L("Hide this box", "اخفي الصندوق ده");
+        menu.RightToLeft = Program.Arabic ? RightToLeft.Yes : RightToLeft.No;
+        Invalidate();
+    }
+
+    void Place()
+    {
+        try
+        {
+            var parts = File.ReadAllText(PosFile).Split(',');
+            var p = new Point(int.Parse(parts[0]), int.Parse(parts[1]));
+            if (Screen.AllScreens.Any(sc => sc.WorkingArea.Contains(new Rectangle(p, new Size(20, 20))))) { Location = p; return; }
+        }
+        catch { }
+        var area = Screen.PrimaryScreen.WorkingArea;
+        Location = new Point(area.Right - Width - 24, area.Top + area.Height / 3);
+    }
+
+    void SavePlace()
+    {
+        try { Directory.CreateDirectory(Path.GetDirectoryName(PosFile)); File.WriteAllText(PosFile, Left + "," + Top); } catch { }
+    }
+
+    /** Links in what is being dragged: a browser link, or text with one link per line (at most 50). */
+    static List<string> LinksFrom(IDataObject data)
+    {
+        var found = new List<string>();
+        string text = null;
+        try
+        {
+            var ms = data.GetData("UniformResourceLocatorW") as MemoryStream;
+            if (ms != null) text = Encoding.Unicode.GetString(ms.ToArray()).TrimEnd('\0');
+            if (string.IsNullOrEmpty(text) && data.GetDataPresent(DataFormats.UnicodeText)) text = data.GetData(DataFormats.UnicodeText) as string;
+            if (string.IsNullOrEmpty(text) && data.GetDataPresent(DataFormats.Text)) text = data.GetData(DataFormats.Text) as string;
+        }
+        catch { }
+        if (string.IsNullOrEmpty(text)) return found;
+        foreach (string part in text.Split(new[] { ' ', '\r', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string u = part.Trim().Trim('"', '<', '>');
+            bool ok = u.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || u.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                      u.StartsWith("magnet:?", StringComparison.OrdinalIgnoreCase);
+            if (ok && u.Length < 4000 && !found.Contains(u)) found.Add(u);
+            if (found.Count >= 50) break;
+        }
+        return found;
+    }
+
+    void Add(List<string> links)
+    {
+        if (links.Count == 0) return;
+        var sb = new StringBuilder("[");
+        for (int i = 0; i < links.Count; i++) sb.Append(i > 0 ? "," : "").Append("{\"url\":").Append(Api.Q(links[i])).Append(",\"source\":\"app\"}");
+        string body = sb.Append("]").ToString();
+        Task.Run(() =>
+        {
+            bool ok;
+            try { api.Post("/api/jobs", body, 30000); ok = true; } catch (Exception ex) { ok = false; Program.Log("drop box: " + ex.Message); }
+            try { BeginInvoke((Action)(() => { flash = ok ? "ok" : "err"; Invalidate(); reset.Stop(); reset.Start(); })); } catch { }
+        });
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        var r = ClientRectangle;
+        g.Clear(flash == "err" ? Red : hover || flash == "ok" ? GreenHot : Green);
+        float k = DeviceDpi / 96f;
+        using (var pen = new Pen(Gold, (hover ? 3f : 1.5f) * k))
+        {
+            if (hover) pen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
+            g.DrawRectangle(pen, r.X + 4 * k, r.Y + 4 * k, r.Width - 9 * k, r.Height - 9 * k);
+        }
+        // a down arrow into a tray, or a tick / cross after a drop
+        float cx = r.Width / 2f, top = 14 * k;
+        using (var pen = new Pen(Cream, 2.4f * k))
+        {
+            pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+            pen.LineJoin = System.Drawing.Drawing2D.LineJoin.Round;
+            if (flash == "ok") g.DrawLines(pen, new[] { new PointF(cx - 11 * k, top + 15 * k), new PointF(cx - 3 * k, top + 23 * k), new PointF(cx + 12 * k, top + 6 * k) });
+            else if (flash == "err") { g.DrawLine(pen, cx - 9 * k, top + 5 * k, cx + 9 * k, top + 23 * k); g.DrawLine(pen, cx + 9 * k, top + 5 * k, cx - 9 * k, top + 23 * k); }
+            else
+            {
+                g.DrawLine(pen, cx, top, cx, top + 18 * k);
+                g.DrawLines(pen, new[] { new PointF(cx - 7 * k, top + 11 * k), new PointF(cx, top + 18 * k), new PointF(cx + 7 * k, top + 11 * k) });
+                g.DrawLines(pen, new[] { new PointF(cx - 13 * k, top + 18 * k), new PointF(cx - 13 * k, top + 25 * k), new PointF(cx + 13 * k, top + 25 * k), new PointF(cx + 13 * k, top + 18 * k) });
+            }
+        }
+        string label = flash == "ok" ? Program.L("Added", "اتضاف") : flash == "err" ? Program.L("Failed", "فشل") : Program.L("Drop links", "اسحب هنا");
+        var tr = new Rectangle(0, (int)(top + 30 * k), r.Width, (int)(20 * k));
+        TextRenderer.DrawText(g, label, Font, tr, Cream, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.ClassStyle |= 0x20000;   // CS_DROPSHADOW
+            cp.ExStyle |= 0x80;         // WS_EX_TOOLWINDOW: not in Alt+Tab or the taskbar
             return cp;
         }
     }

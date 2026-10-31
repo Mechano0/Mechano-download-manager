@@ -15,7 +15,18 @@ IDM-style download manager for Windows. Owner: Eslam (talks in Egyptian Arabic; 
   (aria2c `bin\aria2c.exe` over JSON-RPC, random port+secret), `src/grabber.js` (Site Grabber), `src/preview.js` (play while downloading),
   `src/selfupdate.js` (signed version.json from GitHub releases; Ed25519 public key inside; private key `%USERPROFILE%\.mechano-dm\update-signing-key.pem`,
   never in the repo; Mechano DM.exe runs the verified Setup `/silent /dir=`). Clipboard monitor: C# `ClipboardWatcher` → `/api/clipboard`.
-- UI: `ui/index.html` (themes Auto/Light/Dark, frame glow, playlist "Videos" panel, Site Grabber, app-update bar), `ui/dialog.html`
+- Taskbar icon: `desktop/ShellProps.cs` (compiled into both exes) stamps AppUserModelID `Mechano.DownloadManager` on shortcuts (Setup, and
+  the app fixes old ones at start) and on windows (relaunch icon/name), otherwise Windows shows a blank taskbar icon.
+- Floating window: ⧉ Float on a running job → page posts `{type:'float',id}` → C# `FloatForm` (TopMost, tool window, bottom-right)
+  shows `ui/float.html?id=` (drag/close/main messages). In a browser it uses Document Picture-in-Picture with an iframe.
+- Extras (v1.2): auto-retry of network errors (`autoRetry`, delays 10/30/60 s, `job.retryAt`, `isRetriable`); Defender scan after download
+  (`src/scan.js`, MpCmdRun `-Scan -ScanType 3`, `scanDownloads` risky/all/off, `job.scan`, env `MDM_NO_SCAN=1` in tests); same-name choice
+  (`ifExists`, dialog asks via `/api/jobs/:id/exists`, confirm `onExists: replace` → overwrite); "Many links" batch (POST `/api/jobs` array, bad
+  links skipped); statistics (`src/stats.js` → `data/stats.json`, `/api/stats`, History card); 🐢 in float.html toggles `speedLimitKBps` ↔
+  `quickLimitKBps`; C#: done sound (`completeSound`), balloon on Defender threat, balloon when the complete window is off, `DropForm` drop box
+  (`dropTarget`, tray toggle, position in `data/drop-box.txt`). Code signing: `docs/CODE-SIGNING.md`, `build-setup.ps1 -SignThumbprint`.
+- UI: `ui/index.html` (mail-style side bar with 3 folders: Downloads = link bar + list, History = done/error jobs with search, range,
+  Open/Folder/Retry, `finishedAt`; Settings = settings form; ⚙ opens Settings; themes Auto/Light/Dark, frame glow, playlist "Videos" panel, Site Grabber, app-update bar), `ui/dialog.html`
   ("Download File Info" window: own WebView2 window `WebConfirmForm` in the app, iframe in the page; old WinForms `ConfirmForm` = fallback),
   `ui/i18n.js` (Arabic + RTL: exact-string dictionary + regex patterns + MutationObserver; mark names/paths `translate="no"`).
   Server injects `__MDM_TOKEN__` and `__MDM_LANG__`. Extension (MV3, Chrome/Edge): `extension/`; Firefox: `node tools/build-firefox.js`.
@@ -24,7 +35,7 @@ IDM-style download manager for Windows. Owner: Eslam (talks in Egyptian Arabic; 
 - Data: `data/` (config.json has the private token — never share/copy). Downloads: `%USERPROFILE%\Downloads\M.DM\<Category>`.
 
 ## Commands
-- Tests: `node --test test/` (37 tests, all offline).
+- Tests: `node --test test/` (44 tests, all offline).
 - Release: bump `package.json` version → `build-setup.ps1 -Rebuild` → `node tools/sign-release.js --notes "..."` → upload `Mechano.DM.Setup.exe`,
   `Mechano.DM.zip`, `version.json` to a GitHub release `v<version>`. Small ffmpeg: artifact `ffmpeg-win64` of `.github/workflows/ffmpeg.yml` → `tools\ffmpeg\out\`.
 - Execution policy is Bypass for CurrentUser: run scripts as `powershell -File x.ps1` (no `-ExecutionPolicy` flag).

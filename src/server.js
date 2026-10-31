@@ -79,9 +79,10 @@ function createServer(manager, { updater = null, scheduler = null, selfUpdater =
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY' });
         return res.end(html);
       }
-      if (req.method === 'GET' && url.pathname === '/dialog.html') {
-        // "Download File Info" window: its own WebView2 window in the app, an iframe in the main page
-        const html = fs.readFileSync(path.join(UI_DIR, 'dialog.html'), 'utf8').replace('__MDM_TOKEN__', token).replace('__MDM_LANG__', uiLanguage(manager.config.language));
+      if (req.method === 'GET' && (url.pathname === '/dialog.html' || url.pathname === '/float.html')) {
+        // dialog.html: "Download File Info" window (own WebView2 window in the app, an iframe in the main page)
+        // float.html: small always-on-top window for one download (app window, or picture-in-picture in a browser)
+        const html = fs.readFileSync(path.join(UI_DIR, url.pathname.slice(1)), 'utf8').replace('__MDM_TOKEN__', token).replace('__MDM_LANG__', uiLanguage(manager.config.language));
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'SAMEORIGIN' });
         return res.end(html);
       }
@@ -129,6 +130,7 @@ function createServer(manager, { updater = null, scheduler = null, selfUpdater =
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, manager.list());
+      if (req.method === 'GET' && url.pathname === '/api/stats') return send(res, 200, manager.stats.summary());
       if (url.pathname === '/api/host') {
         // Mechano DM.exe says "I'm here" every few seconds: it shows the download/complete popups itself.
         if (req.method === 'POST') manager.hostSeenAt = Date.now();
@@ -184,8 +186,13 @@ function createServer(manager, { updater = null, scheduler = null, selfUpdater =
       }
       if (req.method === 'POST' && url.pathname === '/api/jobs') {
         const body = await readJson(req);
-        const items = Array.isArray(body) ? body : [body];
-        return send(res, 201, items.map((b) => manager.add(b)));
+        if (!Array.isArray(body)) return send(res, 201, [manager.add(body)]);
+        // a list ("Many links", Site Grabber): a bad link is skipped instead of stopping the rest
+        const added = [];
+        let firstError = null;
+        for (const b of body) { try { added.push(manager.add(b)); } catch (e) { firstError = firstError || e; } }
+        if (!added.length && firstError) throw firstError;
+        return send(res, 201, added);
       }
       if (req.method === 'POST' && parts[1] === 'jobs' && parts[2] && parts[3]) {
         const id = parts[2];
@@ -200,6 +207,7 @@ function createServer(manager, { updater = null, scheduler = null, selfUpdater =
           return send(res, 200, manager.playlistEntry(id, b.entry, b.action, b.to));
         }
         if (action === 'confirm') return send(res, 200, manager.confirm(id, await readJson(req)));
+        if (action === 'exists') return send(res, 200, manager.checkExists(id, await readJson(req)));
         if (action === 'remove') {
           const body = await readJson(req);
           await manager.remove(id, !!body.deleteFiles);
@@ -214,6 +222,17 @@ function createServer(manager, { updater = null, scheduler = null, selfUpdater =
         if (action === 'reveal') {
           const job = manager.mustGet(id);
           if (process.platform === 'win32') revealInExplorer(job);
+          return send(res, 200, { ok: true });
+        }
+        if (action === 'open') {
+          // Open a finished file with its Windows app (History → Open, floating window → Open)
+          const job = manager.mustGet(id);
+          const file = job.file || job.target;
+          if (job.status !== 'done' || !file || !fs.existsSync(file)) return send(res, 409, { error: 'The file is not on the disk any more.' });
+          if (process.platform === 'win32') {
+            if (fs.statSync(file).isDirectory()) revealInExplorer(job);
+            else spawn('explorer.exe', [`"${String(file).replace(/"/g, '')}"`], { detached: true, windowsVerbatimArguments: true }).unref();
+          }
           return send(res, 200, { ok: true });
         }
         return send(res, 404, { error: 'Unknown action' });

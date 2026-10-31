@@ -123,11 +123,72 @@
     'Minimize': 'تصغير', 'Hide to the notification area': 'إخفاء في الأيقونات المخفية', 'The download continues if you close this window.': 'التحميل هيكمل حتى لو قفلت النافذة دي.',
     'Copy': 'نسخ', 'Support': 'ادعمنا', 'Support Mechano DM': 'ادعم Mechano DM', 'Send with PayPal': 'ابعت عن طريق PayPal', 'Send with Payoneer': 'ابعت عن طريق Payoneer', 'Open InstaPay': 'افتح InstaPay',
     'Mechano DM is free. If it helps you, you can support its development:': 'Mechano DM مجاني. لو بيفيدك، تقدر تدعم تطويره:', 'InstaPay address copied.': 'عنوان InstaPay اتنسخ.',
+    // folders (side bar) + History
+    'Folders': 'الفولدرات', 'Downloads': 'التحميلات', 'Download history': 'سجل التحميلات',
+    'Search by file name': 'دوّر باسم الملف', 'Search the history': 'دوّر في السجل', 'Time range': 'الفترة',
+    'All time': 'كل الأوقات', 'Today': 'النهارده', 'Last 7 days': 'آخر 7 أيام', 'Last 30 days': 'آخر 30 يوم',
+    'Finished and failed': 'اللي خلص واللي فشل', 'Finished only': 'اللي خلص بس', 'Failed only': 'اللي فشل بس',
+    'Clear history': 'امسح السجل', 'Removes finished downloads from the list. The files stay on your computer.': 'بيشيل التحميلات اللي خلصت من القائمة. الملفات نفسها بتفضل على جهازك.',
+    'Finished': 'خلص', 'Open': 'افتح', 'Open the file': 'افتح الملف', 'Show in folder': 'اعرضه في الفولدر',
+    'Remove from the history (the file stays)': 'شيله من السجل (الملف بيفضل)', 'Nothing matches the search.': 'مفيش حاجة مطابقة للبحث.',
+    'Finished downloads appear here.': 'التحميلات اللي بتخلص بتظهر هنا.',
+    // floating window
+    '⧉ Float': '⧉ نافذة طافية', 'Show this download in a small window that floats on top of the screen': 'اعرض التحميل ده في نافذة صغيرة طافية فوق الشاشة',
+    'Open Mechano DM': 'افتح Mechano DM', 'Close (the download continues)': 'إغلاق (التحميل هيكمل)', 'left': 'فاضل',
+    'This download was removed.': 'التحميل ده اتشال.', 'Download complete': 'اكتمل التحميل',
   };
 
   // Text with numbers or names inside it.
   const tr = (s) => (AR[s] != null ? AR[s] : s);
+  AR['Restart Mechano DM'] = 'أعد تشغيل Mechano DM';
+  Object.assign(AR, {
+    'Hide the download list': 'اخفي قائمة التحميلات', 'Show the download list': 'اعرض قائمة التحميلات',
+    'Hide the folders': 'اخفي الفولدرات', 'Show the folders': 'اعرض الفولدرات',
+    // Settings: new options
+    'Virus check after download': 'فحص الفيروسات بعد التحميل',
+    'Microsoft Defender checks each finished download. If it finds a threat, Defender removes the file.': 'ويندوز ديفندر بيفحص كل تحميل يخلص. لو لقى فيروس بيشيل الملف.',
+    'Programs, archives and documents (recommended)': 'البرامج والملفات المضغوطة والمستندات (مستحسن)',
+    'All files': 'كل الملفات', 'Off': 'مقفول',
+    'Try again by itself after a network error (times, 0 = off)': 'يحاول تاني لوحده لو النت فصل (عدد المرات، 0 = مقفول)',
+    'When a file with the same name is already there': 'لو فيه ملف بنفس الاسم موجود',
+    'Keep both: save as "file (1)"': 'احتفظ بالاتنين: يتحفظ باسم "file (1)"',
+    'Replace the old file': 'استبدل الملف القديم',
+    'Speed of the 🐢 button, KB/s': 'سرعة زرار 🐢 بالكيلوبايت/ث',
+    'Play a sound when a download finishes': 'شغّل صوت لما التحميل يخلص',
+    'Show the drop box: drag links from the browser onto it': 'اعرض صندوق السحب: اسحب الروابط من المتصفح عليه',
+    // Virus check badges
+    '🛡 Checking for viruses…': '🛡 بيفحص الفيروسات…', '🛡 No threats': '🛡 مفيش فيروسات',
+    'Microsoft Defender checked this file': 'ويندوز ديفندر فحص الملف ده', '⚠ Threat found': '⚠ فيه فيروس', '🛡 Not checked': '🛡 ماتفحصش',
+    // Many links
+    'Many links': 'روابط كتير', 'Add many links': 'إضافة روابط كتير',
+    'Paste a list of links: each one becomes a download': 'الصق قائمة روابط: كل رابط يبقى تحميل',
+    'Paste the links, one per line (or separated by spaces). Lines that are not links are skipped.': 'الصق الروابط، كل رابط في سطر (أو بينهم مسافات). السطور اللي مش روابط بتتخطى.',
+    'Put them in the scheduler (⏰ Later)': 'حطهم في الجدولة (⏰ بعدين)', 'Add': 'إضافة',
+    // Statistics
+    'Statistics': 'الإحصائيات', 'This month': 'الشهر ده',
+    'Last 14 days': 'آخر 14 يوم', 'Top sites': 'أكتر المواقع', 'Nothing yet': 'لسه مفيش حاجة',
+    // Download File Info: same name already there
+    'A file with this name is already in this folder.': 'فيه ملف بنفس الاسم في الفولدر ده.',
+    'Keep both': 'احتفظ بالاتنين', 'Replace it': 'استبدله',
+    // App updates
+    'Install automatically (when no download is running)': 'ثبّت تلقائي (لما مايكونش فيه تحميل شغال)',
+    'No answer from GitHub': 'GitHub مش بيرد', 'No release information yet': 'لسه مفيش معلومات عن نسخ جديدة',
+    'The update information is not signed correctly. Ignored.': 'معلومات التحديث مش موقّعة صح، فاتجاهلت.',
+    'Mechano DM is up to date.': 'عندك آخر نسخة من Mechano DM.',
+    'This is a portable copy. Download the new version from the Releases page.': 'دي نسخة محمولة. نزّل النسخة الجديدة من صفحة الإصدارات.',
+    'Check for updates': 'دوّر على تحديث', 'Install update': 'ثبّت التحديث', 'Checking for updates…': 'بيدوّر على تحديث…',
+    // Floating window: 🐢
+    'Slow down all downloads': 'هدّي سرعة كل التحميلات', 'Remove the speed limit': 'شيل حد السرعة',
+  });
   const PATTERNS = [
+    [/^Restart Mechano DM\? (\d+) running downloads stop for a few seconds and then continue\.$/, (m) => `أعيد تشغيل Mechano DM؟ ${m[1]} تحميل شغال هيقفوا كام ثانية وبعدين يكملوا.`],
+    [/^Mechano DM (\S+) · up to date$/, (m) => `Mechano DM ${m[1]} · عندك آخر نسخة`],
+    [/^Mechano DM (\S+) · (.+)$/, (m) => `Mechano DM ${m[1]} · ${t(m[2])}`],
+    [/^(\d+) files?$/, (m) => `${m[1]} ملف`],
+    [/^(\d+) links?$/, (m) => `${m[1]} رابط`],
+    [/^trying again in (\d+)s \((\d+) of (\d+)\)$/, (m) => `هيحاول تاني بعد ${m[1]} ث (${m[2]} من ${m[3]})`],
+    [/^(\d+) downloads · (.+)$/, (m) => `${m[1]} تحميل · ${m[2]}`],
+    [/^Remove (\d+) finished downloads from the history\? The files stay on your computer\.$/, (m) => `أشيل ${m[1]} تحميل خلصوا من السجل؟ الملفات نفسها هتفضل على جهازك.`],
     [/^(\d+) of (\S+)$/, (m) => `${m[1]} من ${m[2]}`],
     [/^\+(\d+) more waiting$/, (m) => `+${m[1]} في الانتظار`],
     [/^Remember this path for "(.+)" category$/, (m) => `تذكّر المسار ده لفئة «${tr(m[1])}»`],

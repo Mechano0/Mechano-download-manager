@@ -143,6 +143,7 @@ function baseArgs(o) {
       '--parse-metadata', '%(title)s|Facebook video %(id)s:^\\|(?P<title>.+)',
     );
   }
+  if (o.overwrite) args.push('--force-overwrites'); // "Replace" was chosen for a file that is already there
   if (o.cookiesFile) args.push('--cookies', o.cookiesFile);
   if (o.ffmpeg) args.push('--ffmpeg-location', o.ffmpeg);
   if (o.referer) args.push('--referer', o.referer);

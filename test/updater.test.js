@@ -1,4 +1,5 @@
 'use strict';
+process.env.MDM_NO_SCAN = '1'; // no real Microsoft Defender scans during tests
 // Updater rules, with a fake yt-dlp (nothing is downloaded or installed).
 const test = require('node:test');
 const assert = require('node:assert/strict');

@@ -16,22 +16,22 @@
      file card, connections), colours are Mechano DM's own (v2 theme tokens). */
   :root {
     color-scheme: light;
-    --bg: #f3f4f6; --panel: #ffffff; --raised: #f7f8fa; --text: #1f2328; --muted: #656d76;
-    --line: #e2e5e9; --line-strong: #cdd2d8; --accent: #1f5bd8; --accent-2: #174ab3; --accent-soft: #e8effc;
-    --ok: #1f9d55; --warn: #9a6700; --warn-soft: #fff6e0; --err: #cf222e; --on-accent: #fff;
+    --bg: #f5eedf; --panel: #fffbf3; --raised: #f6eedd; --text: #3a2a1d; --muted: #7b6853;
+    --line: #e8dcc3; --line-strong: #d6c39c; --accent: #2e6b4c; --accent-2: #245a3f; --accent-soft: #e3efe5;
+    --ok: #2f8f55; --warn: #a8701c; --warn-soft: #fff6e0; --err: #cf222e; --on-accent: #fff;
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: #101214; --panel: #181b1f; --raised: #1f2328; --text: #e6e8eb; --muted: #959ca5;
-    --line: #2a2f35; --line-strong: #3a4047; --accent: #5b8def; --accent-2: #7ba4f3; --accent-soft: #1c2a44;
-    --ok: #3fb96a; --warn: #d29922; --warn-soft: #2b2414; --err: #f2575f; --on-accent: #0d131a;
+    --bg: #17120d; --panel: #211a13; --raised: #2a2119; --text: #f4ead9; --muted: #b5a38b;
+    --line: #382c20; --line-strong: #4a3b2b; --accent: #6cbd8d; --accent-2: #8fd2a9; --accent-soft: #1d3628;
+    --ok: #4fbf76; --warn: #e3ad4a; --warn-soft: #3a2c16; --err: #f07c62; --on-accent: #17120d;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --bg: #101214; --panel: #181b1f; --raised: #1f2328; --text: #e6e8eb; --muted: #959ca5;
-      --line: #2a2f35; --line-strong: #3a4047; --accent: #5b8def; --accent-2: #7ba4f3; --accent-soft: #1c2a44;
-      --ok: #3fb96a; --warn: #d29922; --warn-soft: #2b2414; --err: #f2575f; --on-accent: #0d131a;
+      --bg: #17120d; --panel: #211a13; --raised: #2a2119; --text: #f4ead9; --muted: #b5a38b;
+      --line: #382c20; --line-strong: #4a3b2b; --accent: #6cbd8d; --accent-2: #8fd2a9; --accent-soft: #1d3628;
+      --ok: #4fbf76; --warn: #e3ad4a; --warn-soft: #3a2c16; --err: #f07c62; --on-accent: #17120d;
     }
   }
   * { box-sizing: border-box; }
@@ -98,6 +98,11 @@
   .note.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
   .note.err { background: color-mix(in srgb, var(--err) 12%, transparent); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
   .note[hidden] { display: none; }
+  .exists { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 7px 10px; border-radius: 8px; font-size: 12.5px;
+    background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); }
+  .exists[hidden] { display: none; }
+  .exists b { font-weight: 600; flex-basis: 100%; }
+  .exists .check { color: inherit; }
   .note svg { width: 16px; height: 16px; flex: none; margin-top: 1px; }
   .note.warn svg { color: var(--warn); } .note.err svg { color: var(--err); } .note:not(.warn):not(.err) svg { color: var(--accent); }
 
@@ -146,7 +151,7 @@
     .body { grid-template-columns: 1fr; }
     .card { flex-direction: row; justify-content: flex-start; text-align: start; }
     .type-icon { width: 44px; height: 54px; } .thumb { width: 96px; }
-    .form { grid-template-columns: 1fr; } .sub { grid-column: 1; }
+    .form { grid-template-columns: 1fr; } .sub, .exists { grid-column: 1; }
   }
 </style>
 </head>
@@ -222,6 +227,11 @@
       <button type="button" class="icon" id="browse" title="Choose folder" aria-label="Choose folder">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       </button>
+    </div>
+    <div class="exists" id="exists" role="status" hidden>
+      <b id="existsText">A file with this name is already in this folder.</b>
+      <label class="check"><input type="radio" name="onExists" value="rename" checked> <span id="keepText">Keep both</span></label>
+      <label class="check"><input type="radio" name="onExists" value="replace"> <span>Replace it</span></label>
     </div>
     <label class="check sub"><input type="checkbox" id="remember"> <span id="rememberText">Remember this path for "General" category</span></label>
 
@@ -418,6 +428,7 @@ async function load() {
   if (d.note) setNote(d.note, 'warn');
   else if (d.playlist) setNote('Playlist: every video is downloaded one after another. You can skip or re-order them in the main window.');
   setBusy(false);
+  checkExists();
   $('#start').focus();
 }
 
@@ -467,7 +478,7 @@ $('#browse').addEventListener('click', async () => {
   try {
     const cur = current();
     const p = await pickFolder(cur.dir || (d && d.folder) || '');
-    if (p) $('#saveAs').value = p;
+    if (p) { $('#saveAs').value = p; checkExists(); }
   } catch (e) { setNote(e.message, 'err'); }
   setBusy(false);
   $('#saveAs').focus();
@@ -480,6 +491,27 @@ $('#fileName').addEventListener('input', () => {
   const dot = v.lastIndexOf('.');
   if (dot > 0) drawType(v.slice(dot + 1), $('#category').value);
 });
+
+// Same name already in the folder? Ask: keep both (new name) or replace. Checked a moment after typing stops.
+let existsTimer = null, existsSeq = 0;
+function checkExists() {
+  clearTimeout(existsTimer);
+  existsTimer = setTimeout(async () => {
+    const seq = ++existsSeq;
+    const p = current();
+    if (!job || $('#fileName').hidden || !p.name || !p.dir || BAD_NAME.test(p.name)) { $('#exists').hidden = true; return; }
+    try {
+      const r = await api(`/api/jobs/${job.id}/exists`, { dir: p.dir, name: p.name });
+      if (seq !== existsSeq) return;
+      $('#exists').hidden = !r.exists;
+      $('#keepText').textContent = T('Keep both') + (r.newName ? '  →  ' : '');
+      if (r.newName) { const n = document.createElement('bdi'); n.textContent = r.newName; n.translate = false; $('#keepText').appendChild(n); }
+    } catch { $('#exists').hidden = true; }
+  }, 300);
+}
+for (const id of ['#fileName', '#saveAs']) $(id).addEventListener('input', checkExists);
+$('#category').addEventListener('change', checkExists);
+$('#quality').addEventListener('change', checkExists);
 
 $('#copyUrl').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('#url').value); setNote('Link copied.'); }
@@ -506,6 +538,7 @@ async function finish(action) {
         body.dir = /^[a-zA-Z]:$/.test(p.dir) ? p.dir + '\\' : p.dir;
         body.rememberPath = $('#remember').checked;
       }
+      if (!$('#exists').hidden) body.onExists = document.querySelector('input[name=onExists]:checked').value;
       if (!$('#qualityWrap').hidden) body.quality = $('#quality').value;
       const n = Number($('#conn').value);
       if (!$('#connRow').hidden && n >= 1 && n <= 32 && (!d || n !== d.connections)) body.connections = n;

@@ -176,7 +176,7 @@ class MediaDownload extends EventEmitter {
 
     const files = this.parts.map((p) => p.target);
     let out = plan.final;
-    if (fs.existsSync(out)) out = uniquePath(path.dirname(out), path.basename(out));
+    if (fs.existsSync(out) && !o.overwrite) out = uniquePath(path.dirname(out), path.basename(out));
     const tmp = (o.workDir ? path.join(o.workDir, path.basename(out)) : out) + '.joining' + path.extname(out);
     if (o.workDir) fs.mkdirSync(o.workDir, { recursive: true });
     if (plan.merge) {
@@ -191,6 +191,7 @@ class MediaDownload extends EventEmitter {
     } else {
       await fsp.rename(files[0], tmp);
     }
+    if (o.overwrite) await fsp.rm(out, { force: true }); // "Replace": the old file goes now that the new one is ready
     await moveFile(tmp, out);
     for (const f of files) await fsp.rm(f, { force: true });
     const size = fs.statSync(out).size;

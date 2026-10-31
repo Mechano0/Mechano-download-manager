@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en" data-lang="__MDM_LANG__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mechano DM</title>
+<script>
+  // Same theme as the main window (saved there).
+  try { const t = localStorage.getItem('mdm.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+</script>
+<script src="/i18n.js"></script>
+<style>
+  /* Small always-on-top window: one download, its progress and Pause / Resume. */
+  :root { color-scheme: light; --bg: #fffbf3; --raised: #f6eedd; --text: #3a2a1d; --muted: #7b6853; --line: #e8dcc3;
+    --accent: #d4a237; --ok: #2f9a58; --err: #b8432e; --warn: #a8701c; --track: #fffdf8; --track-line: #d9c8a3; }
+  :root[data-theme="dark"] { color-scheme: dark; --bg: #211a13; --raised: #2a2119; --text: #f4ead9; --muted: #b5a38b; --line: #382c20;
+    --accent: #e6b04a; --ok: #4fbf76; --err: #f07c62; --warn: #e3ad4a; --track: #f4ead9; --track-line: #4a3b2b; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { color-scheme: dark; --bg: #211a13; --raised: #2a2119; --text: #f4ead9; --muted: #b5a38b; --line: #382c20;
+      --accent: #e6b04a; --ok: #4fbf76; --err: #f07c62; --warn: #e3ad4a; --track: #f4ead9; --track-line: #4a3b2b; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 12.5px/1.35 "Segoe UI Variable Text", "Segoe UI", Tahoma, system-ui, sans-serif;
+    font-variant-numeric: tabular-nums; user-select: none; overflow: hidden; }
+  .wrap { height: 100%; display: grid; grid-template-rows: auto auto auto; align-content: center; gap: 7px; padding: 9px 12px 10px;
+    border: 1px solid var(--line); border-top: 3px solid var(--accent); }
+  .wrap.done { border-top-color: var(--ok); } .wrap.error { border-top-color: var(--err); }
+  .top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .top img { width: 18px; height: 18px; flex: none; }
+  .name { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: ltr; unicode-bidi: plaintext; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .ico { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); flex: none; }
+  .ico:hover { background: var(--raised); color: var(--text); }
+  .ico.x:hover { background: #c42b1c; color: #fff; }
+  .ico svg { width: 14px; height: 14px; }
+  .bar { position: relative; height: 16px; border-radius: 8px; background: var(--track); border: 1px solid var(--track-line); overflow: hidden; }
+  .fill { position: absolute; inset-block: 0; inset-inline-start: 0; width: 0; background: var(--ok); transition: width .4s; }
+  .bar.indef .fill { width: 30%; animation: slide 1.2s ease-in-out infinite; }
+  @keyframes slide { from { inset-inline-start: -30%; } to { inset-inline-start: 100%; } }
+  .pct { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 700; font-size: 10.5px; color: #0f2a17; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
+  .bottom { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .info { flex: 1; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; }
+  .info b { color: var(--text); font-weight: 600; }
+  .act { height: 24px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--raised); font-size: 11.5px; flex: none; }
+  .act:hover { border-color: var(--accent); color: var(--accent); }
+  .act[hidden], .ico[hidden] { display: none; }
+  .slow { width: auto; padding: 0 6px; gap: 4px; display: flex; font-size: 11px; }
+  .slow.on { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text); }
+  @media (prefers-reduced-motion: reduce) { .fill, .bar.indef .fill { transition: none; animation: none; } }
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <div class="top">
+    <img src="/logo.png?v=2" alt="">
+    <div class="name" id="name" translate="no">…</div>
+    <button class="ico slow" id="slowBtn" type="button" title="Slow down all downloads" aria-pressed="false">🐢<span id="slowText"></span></button>
+    <button class="ico" id="mainBtn" type="button" title="Open Mechano DM" aria-label="Open Mechano DM" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+    </button>
+    <button class="ico x" id="closeBtn" type="button" title="Close (the download continues)" aria-label="Close" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="bar" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="fill" id="fill"></div><span class="pct" id="pct"></span></div>
+  <div class="bottom">
+    <div class="info" id="info"></div>
+    <button class="act" id="pauseBtn" type="button" hidden>Pause</button>
+    <button class="act" id="resumeBtn" type="button" hidden>Resume</button>
+    <button class="act" id="openBtn" type="button" hidden>Open</button>
+    <button class="act" id="folderBtn" type="button" hidden>Folder</button>
+  </div>
+</div>
+<script>
+const TOKEN = '__MDM_TOKEN__';
+const $ = (s) => document.querySelector(s);
+const T = (s) => (window.MDM_I18N ? MDM_I18N.t(s) : s);
+const params = new URLSearchParams(location.search);
+const ID = params.get('id');
+const host = !!(window.chrome && window.chrome.webview); // inside Mechano DM.exe
+const post = (type, extra) => { if (host) window.chrome.webview.postMessage({ type, ...extra }); };
+
+const fmtBytes = (n) => { if (n == null || !isFinite(n)) return '?'; const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return n.toFixed(i ? 1 : 0) + ' ' + u[i]; };
+const B = (n) => '<bdi>' + fmtBytes(n) + '</bdi>'; // keeps '101.4 KB' in order in Arabic
+const fmtEta = (s) => s == null ? '' : s > 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : s > 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? { headers: { 'x-mdm-token': TOKEN } } :
+    { method: 'POST', headers: { 'content-type': 'application/json', 'x-mdm-token': TOKEN }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+// Overall progress 0..1 (null = size unknown); playlists count finished videos.
+function fraction(j) {
+  if (j.status === 'done') return 1;
+  if (j.playlist && Array.isArray(j.entries) && j.entries.length) {
+    const kept = j.entries.filter((e) => e.state !== 'skipped');
+    if (!kept.length) return 0;
+    const fin = kept.filter((e) => e.state === 'done' || e.state === 'error').length;
+    const now = kept.find((e) => e.state === 'downloading');
+    return Math.min(1, (fin + (now && now.size ? Math.min(1, (now.downloaded || 0) / now.size) : 0)) / kept.length);
+  }
+  return j.size ? Math.min(1, j.downloaded / j.size) : null;
+}
+
+const STATUS = { queued: 'Waiting in queue', starting: 'Starting…', paused: 'Paused', scheduled: 'Waiting for the scheduler', error: 'Error', done: 'Download complete', merging: 'merging' };
+let job = null;
+function show(j) {
+  job = j;
+  document.title = (j.filename || 'Mechano DM');
+  $('#name').textContent = j.filename || j.url;
+  $('#name').title = j.filename || j.url;
+  const f = fraction(j);
+  const pct = f == null ? null : j.status === 'done' ? 100 : Math.min(99, Math.floor(f * 100));
+  const running = ['downloading', 'starting'].includes(j.status);
+  $('#bar').classList.toggle('indef', pct == null && running);
+  $('#fill').style.width = pct == null ? '' : pct + '%';
+  $('#pct').textContent = pct == null ? '' : pct + '%';
+  if (pct == null) $('#bar').removeAttribute('aria-valuenow'); else $('#bar').setAttribute('aria-valuenow', pct);
+  $('#wrap').classList.toggle('done', j.status === 'done');
+  $('#wrap').classList.toggle('error', j.status === 'error');
+  let info;
+  if (j.status === 'downloading') {
+    info = `<b>${B(j.speed)}/s</b> · ${B(j.downloaded)} / ${B(j.size)}${j.eta != null ? ' · ' + T('left') + ' ' + fmtEta(j.eta) : ''}`;
+  } else if (j.status === 'done') {
+    info = `<b>${T('Download complete')}</b> · ${B(j.size || j.downloaded)}`;
+  } else if (j.status === 'error') {
+    info = `<b style="color:var(--err)">${T('Error')}</b> · ${String(j.error || '').replace(/[&<>]/g, '')}`;
+  } else {
+    info = `${T(STATUS[j.status] || j.status)} · ${B(j.downloaded)} / ${B(j.size)}`;
+  }
+  $('#info').innerHTML = info;
+  $('#pauseBtn').hidden = !['downloading', 'starting', 'queued'].includes(j.status);
+  $('#resumeBtn').hidden = !['paused', 'error'].includes(j.status);
+  $('#resumeBtn').textContent = T(j.status === 'error' ? 'Retry' : 'Resume');
+  $('#openBtn').hidden = j.status !== 'done' || j.playlist;
+  $('#folderBtn').hidden = j.status !== 'done';
+}
+
+function gone() {
+  $('#name').textContent = T('This download was removed.');
+  $('#info').textContent = '';
+  ['#pauseBtn', '#resumeBtn', '#openBtn', '#folderBtn'].forEach((s) => ($(s).hidden = true));
+  setTimeout(() => post('close'), 1500);
+}
+
+const act = (a) => async () => { if (!job) return; try { await api(`/api/jobs/${job.id}/${a}`, {}); } catch (err) { $('#info').textContent = err.message; } };
+$('#pauseBtn').addEventListener('click', act('pause'));
+$('#resumeBtn').addEventListener('click', act('resume'));
+$('#openBtn').addEventListener('click', act('open'));
+$('#folderBtn').addEventListener('click', act('reveal'));
+
+// 🐢 quick speed limit: one click limits all downloads to the "quick limit" from Settings, another click removes it.
+let cfg = null;
+function showSlow() {
+  if (!cfg) return;
+  const on = cfg.speedLimitKBps > 0;
+  $('#slowBtn').classList.toggle('on', on);
+  $('#slowBtn').setAttribute('aria-pressed', on);
+  $('#slowText').innerHTML = on ? '<bdi>' + fmtBytes(cfg.speedLimitKBps * 1024) + '/s</bdi>' : '';
+  $('#slowBtn').title = T(on ? 'Remove the speed limit' : 'Slow down all downloads');
+}
+async function loadCfg() { try { cfg = await api('/api/config'); showSlow(); } catch { /* engine restarting */ } }
+$('#slowBtn').addEventListener('click', async () => {
+  if (!cfg) return;
+  const want = cfg.speedLimitKBps > 0 ? 0 : (cfg.quickLimitKBps || 512);
+  try { cfg = await api('/api/config', { speedLimitKBps: want }); showSlow(); } catch (err) { $('#info').textContent = err.message; }
+});
+loadCfg();
+setInterval(loadCfg, 5000); // follows changes made in the main window
+
+if (host) {
+  $('#mainBtn').hidden = false;
+  $('#closeBtn').hidden = false;
+  $('#mainBtn').addEventListener('click', () => post('main'));
+  $('#closeBtn').addEventListener('click', () => post('close'));
+  // Drag the window from anywhere except the buttons.
+  document.addEventListener('mousedown', (e) => { if (e.button === 0 && !e.target.closest('button')) post('drag'); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') post('close'); });
+}
+
+function connect() {
+  const es = new EventSource(`/api/events?token=${TOKEN}`);
+  es.addEventListener('snapshot', (e) => {
+    const j = JSON.parse(e.data).find((x) => x.id === ID);
+    if (j) show(j); else gone();
+  });
+  es.addEventListener('job', (e) => { const j = JSON.parse(e.data); if (j.id === ID) show(j); });
+  es.addEventListener('removed', (e) => { if (JSON.parse(e.data).id === ID) gone(); });
+}
+if (ID) connect(); else gone();
+</script>
+</body>
+</html>

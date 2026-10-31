@@ -70,8 +70,11 @@ class SelfUpdater extends EventEmitter {
     this.installFile = null; // set when a verified Setup.exe is ready; Mechano DM.exe runs it
     this.first = setTimeout(() => this.check('auto'), firstCheckDelayMs);
     this.timer = setInterval(() => this.check('auto'), 12 * HOUR);
+    // "Install automatically" waits for running downloads: look again every few minutes until they are done.
+    this.idle = setInterval(() => this.autoInstallIfIdle(), 5 * 60 * 1000);
     this.first.unref?.();
     this.timer.unref?.();
+    this.idle.unref?.();
   }
 
   get mode() { return this.m.config.appUpdate || 'notify'; }
@@ -93,8 +96,7 @@ class SelfUpdater extends EventEmitter {
       this.state.notes = String(manifest.notes || '').slice(0, 2000) || null;
       this.state.available = newer(manifest.version, this.state.current);
       this.state.error = null;
-      // "Install automatically": only when nothing is downloading (the installer restarts the app)
-      if (this.state.available && reason === 'auto' && this.mode === 'auto' && this.state.installed && this.m.runners.size === 0) this.install().catch(() => {});
+      if (reason === 'auto') this.autoInstallIfIdle();
     } catch (e) {
       this.state.error = e.name === 'TimeoutError' ? 'No answer from GitHub' : e.message;
     } finally {
@@ -103,6 +105,15 @@ class SelfUpdater extends EventEmitter {
       this.emitStatus();
     }
     return this.status();
+  }
+
+  /** "Install automatically": only when nothing is downloading, because the installer restarts the app. */
+  autoInstallIfIdle() {
+    const s = this.state;
+    if (this.mode !== 'auto' || !s.available || !s.installed || s.downloading || s.installing || this.installFile) return false;
+    if (this.m.runners.size > 0) return false;
+    this.install().catch(() => {});
+    return true;
   }
 
   /** Downloads the signed Setup.exe, checks it, then hands it to Mechano DM.exe to run. */
@@ -149,7 +160,7 @@ class SelfUpdater extends EventEmitter {
     return this.status();
   }
 
-  stop() { clearTimeout(this.first); clearInterval(this.timer); }
+  stop() { clearTimeout(this.first); clearInterval(this.timer); clearInterval(this.idle); }
 }
 
 function hashFile(file) {

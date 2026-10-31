@@ -20,6 +20,8 @@ const { categorize, CATEGORIES, filenameFromUrl, sanitizeFilename } = require('.
 const { PlaylistDownload } = require('./playlist');
 const { MediaDownload } = require('./media');
 const { TorrentDownload, isMagnet, isTorrentUrl } = require('./torrent');
+const { Stats } = require('./stats');
+const scan = require('./scan');
 
 const YTDLP_SITES = [
   'youtube.com', 'youtu.be', 'youtube-nocookie.com', 'facebook.com', 'fb.watch', 'instagram.com', 'tiktok.com',
@@ -48,7 +50,25 @@ const DEFAULT_CONFIG = {
   clipboardMonitor: true, // offer to download links you copy (Mechano DM.exe watches the clipboard)
   categoryDirs: {}, // "Remember this path for the category": { Video: 'D:\\Videos', ... }
   appUpdate: 'notify', // new versions of Mechano DM: 'notify' (ask first), 'auto' or 'off'
+  scanDownloads: 'risky', // Microsoft Defender scan after a download: 'risky' (not video/music/pictures), 'all', 'off'
+  autoRetry: 3, // network failures: try again by itself up to N times (after 10 s, 30 s, 1 min); 0 = off
+  ifExists: 'rename', // a file with the same name is already there: 'rename' (file (1).zip) or 'replace'
+  completeSound: true, // play a sound when a download finishes (Mechano DM.exe)
+  dropTarget: false, // small always-on-top box: drop links on it to download them (Mechano DM.exe)
+  quickLimitKBps: 512, // the 🐢 button in the floating window limits the speed to this
 };
+
+/** Delays before trying a failed download again (seconds): 1st, 2nd, 3rd and later tries. */
+const RETRY_DELAYS = [10, 30, 60];
+
+/** Network problems are worth another try; a missing file (404), DRM or a bad link are not. */
+function isRetriable(message) {
+  const m = String(message || '');
+  if (/DRM|web page|Invalid URL|Only http|changed on the server|cancel/i.test(m)) return false;
+  const http = m.match(/HTTP (\d{3})/);
+  if (http) return /^(5\d\d|408|429)$/.test(http[1]);
+  return /ECONNRESET|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|ENETDOWN|EHOSTUNREACH|EPIPE|socket hang up|timed? ?out|Connection closed early|did not complete|network|getaddrinfo|Temporary failure|Unable to download|HTTP Error 5\d\d|Read timed out/i.test(m);
+}
 
 const CATEGORY_NAMES = ['General', 'Video', 'Music', 'Compressed', 'Documents', 'Programs', 'Images'];
 // Copied links that count as downloads (pictures and plain text files are left alone)
@@ -71,10 +91,13 @@ class Manager extends EventEmitter {
     this.saveConfig();
     this.ensureCategoryFolders();
     this.limiter = new RateLimiter(this.config.speedLimitKBps * 1024);
+    this.stats = new Stats(dataDir);
+    this.scanPath = scan.scanPath; // tests replace this with a fake scanner
     this.jobs = new Map();
     this.runners = new Map();
     for (const j of readJson(this.jobsPath, [])) {
       if (j.status === 'downloading' || j.status === 'starting') j.status = 'queued'; // app was closed mid-download
+      if (j.scan && j.scan.state === 'scanning') j.scan = null; // the app closed during the virus check
       j.speed = 0;
       this.jobs.set(j.id, j);
     }
@@ -141,8 +164,15 @@ class Manager extends EventEmitter {
 
   updateConfig(patch) {
     const allowed = ['downloadDir', 'useCategories', 'maxConcurrent', 'connections', 'speedLimitKBps', 'hlsConcurrency', 'ytdlpPath', 'ffmpegPath', 'ytdlpSites', 'autoUpdateDays', 'ytdlpChannel', 'confirmDownloads', 'showCompleteDialog', 'fastVideo',
-      'language', 'clipboardMonitor', 'categoryDirs', 'appUpdate'];
+      'language', 'clipboardMonitor', 'categoryDirs', 'appUpdate', 'scanDownloads', 'autoRetry', 'ifExists', 'completeSound', 'dropTarget', 'quickLimitKBps'];
     for (const k of allowed) if (k in patch) this.config[k] = patch[k];
+    if (!['risky', 'all', 'off'].includes(this.config.scanDownloads)) this.config.scanDownloads = 'risky';
+    if (!['rename', 'replace'].includes(this.config.ifExists)) this.config.ifExists = 'rename';
+    this.config.autoRetry = clampInt(this.config.autoRetry ?? 3, 0, 10);
+    this.config.completeSound = this.config.completeSound !== false;
+    this.config.dropTarget = !!this.config.dropTarget;
+    this.config.quickLimitKBps = clampInt(this.config.quickLimitKBps || 512, 16, 1024 * 1024);
+    this.config.speedLimitKBps = Math.max(0, Math.round(Number(this.config.speedLimitKBps) || 0));
     this.config.confirmDownloads = !!this.config.confirmDownloads;
     this.config.showCompleteDialog = !!this.config.showCompleteDialog;
     this.config.fastVideo = this.config.fastVideo !== false;
@@ -259,8 +289,9 @@ class Manager extends EventEmitter {
   /** Start now (also takes a job out of the schedule). */
   resume(id) {
     const job = this.mustGet(id);
-    if (['paused', 'error', 'scheduled'].includes(job.status)) {
+    if (['paused', 'error', 'scheduled'].includes(job.status) || (job.status === 'queued' && job.retryAt)) {
       job.status = 'queued'; job.error = null; job.startAt = null; job.scheduled = false; job.scheduleRun = null;
+      job.retryAt = null; job.retries = 0; // started by hand: the automatic tries count from zero again
       this.changed(job, true);
     }
     this.pump();
@@ -345,9 +376,10 @@ class Manager extends EventEmitter {
    * Approve a download from the popup: optional custom folder and quality; start now or put it
    * in the scheduler. quality = 'best' | 'audio' | a height such as '1080'.
    */
-  confirm(id, { dir, later, quality, filename, category, rememberPath, description, connections } = {}) {
+  confirm(id, { dir, later, quality, filename, category, rememberPath, description, connections, onExists } = {}) {
     const job = this.mustGet(id);
     if (job.status !== 'confirm') return publicJob(job);
+    if (['rename', 'replace'].includes(onExists)) job.onExists = onExists; // the dialog's choice when the file is already there
     if (quality != null && job.kind === 'ytdlp') {
       const q = String(quality);
       job.audioOnly = q === 'audio';
@@ -571,15 +603,37 @@ class Manager extends EventEmitter {
         if (r.count != null) { job.playlistDone = r.count; job.playlistSkipped = r.skipped || 0; }
         job.speed = 0; job.eta = 0;
         job.finishedAt = Date.now();
+        job.retries = 0; job.retryAt = null;
         this.dropSecrets(job);
         fs.rm(this.workPath(job), { recursive: true, force: true }, () => {});
+        this.stats.record(job, job.finishedAt);
+        this.scanFinished(job);
       }
     }).catch((err) => {
       if (runner.userPaused) { job.status = 'paused'; return; }
       if (err && err.code === 'MDM_WEBPAGE') return; // handled by switch below
-      job.status = 'error';
-      job.error = err && err.message ? err.message : String(err);
+      const message = err && err.message ? err.message : String(err);
       job.speed = 0;
+      const tries = job.retries || 0;
+      if (tries < this.config.autoRetry && isRetriable(message)) {
+        // Network trouble: wait a little and try again by itself (the download continues where it stopped).
+        const delays = this.retryDelays || RETRY_DELAYS;
+        const wait = Math.round(delays[Math.min(tries, delays.length - 1)] * 1000);
+        job.retries = tries + 1;
+        job.status = 'queued';
+        job.error = null;
+        job.lastError = message;
+        job.retryAt = Date.now() + wait;
+        job.startAt = job.retryAt;
+        job.log.push(`Failed (${message}). Trying again in ${wait / 1000} s (${job.retries} of ${this.config.autoRetry}).`);
+        if (job.log.length > 30) job.log.shift();
+        setTimeout(() => this.pump(), wait + 50).unref?.();
+        return;
+      }
+      job.status = 'error';
+      job.error = message;
+      job.retryAt = null;
+      job.finishedAt = Date.now(); // History folder: when it failed
     }).finally(() => {
       if (this.runners.get(job.id) === runner) this.runners.delete(job.id);
       this.cleanupCookies(job);
@@ -594,6 +648,38 @@ class Manager extends EventEmitter {
     });
   }
 
+  /** Virus check (Microsoft Defender) of a finished download; the result shows on the job. */
+  scanFinished(job) {
+    if (process.env.MDM_NO_SCAN === '1' || !scan.shouldScan(job, this.config.scanDownloads)) return; // tests switch the real scanner off
+    job.scan = { state: 'scanning', at: Date.now() };
+    const file = job.file;
+    Promise.resolve(this.scanPath(file)).catch((e) => ({ state: 'failed', detail: e.message })).then((r) => {
+      if (this.jobs.get(job.id) !== job) return; // removed meanwhile
+      job.scan = { state: r.state, detail: r.detail || null, at: Date.now() };
+      if (r.state === 'threat') {
+        job.log.push(`Microsoft Defender: threat found (${r.detail}). Defender handles the file (quarantine).`);
+        if (job.log.length > 30) job.log.shift();
+      }
+      this.changed(job, true);
+      this.emit('scanned', job.id, r);
+    });
+  }
+
+  /**
+   * "Download File Info": is there already a file with this name in that folder?
+   * Returns { exists, newName } (newName = what "keep both" would save it as).
+   */
+  checkExists(id, { dir, name } = {}) {
+    const job = this.mustGet(id);
+    const folder = dir && path.isAbsolute(String(dir)) ? String(dir) : this.suggestDir(job, name);
+    const base = sanitizeFilename(String(name || '').trim());
+    if (!base || job.playlist || job.kind === 'torrent') return { exists: false };
+    const full = path.join(folder, base);
+    let exists = false;
+    try { exists = fs.statSync(full).isFile(); } catch { /* not there */ }
+    return { exists, newName: exists ? path.basename(require('./util').uniquePath(folder, base)) : null };
+  }
+
   makeRunner(job) {
     const cfg = this.config;
     const tools = this.tools();
@@ -603,6 +689,8 @@ class Manager extends EventEmitter {
     if (job.referrer) headers.referer = job.referrer;
 
     const workDir = this.workDirFor(job);
+    // same name already in the folder: the dialog's choice, else the setting (rename = "file (1).zip")
+    const overwrite = (job.onExists || cfg.ifExists) === 'replace';
     if (job.kind === 'ytdlp') {
       let cookiesFile = null;
       if (job.cookies && job.cookies.length) cookiesFile = writeCookiesFile(path.join(this.dataDir, 'cookies', job.id + '.txt'), job.cookies);
@@ -619,7 +707,7 @@ class Manager extends EventEmitter {
         limiter: this.limiter,
         connections: job.connections || cfg.connections,
         cookieFor: (u) => cookieHeader(job.cookies, u),
-        workDir,
+        workDir, overwrite: overwrite && !job.playlist,
       };
       // Playlists: video by video, so each one can be watched, skipped or re-ordered
       if (job.playlist) return new PlaylistDownload(job, opts);
@@ -640,7 +728,7 @@ class Manager extends EventEmitter {
       return new HlsDownload({
         url: job.url, dir: dirFor('x.mp4'), target: job.target, filename: job.filename, headers,
         concurrency: job.connections || cfg.hlsConcurrency, maxHeight: job.maxHeight, ffmpeg: tools.ffmpeg, limiter: this.limiter,
-        workDir,
+        workDir, overwrite,
       });
     }
 
@@ -648,7 +736,7 @@ class Manager extends EventEmitter {
     const seg = new SegmentedDownload({
       url: job.url, dir: cfg.downloadDir, target: job.target, filename: job.filename, headers,
       connections: job.connections || cfg.connections, limiter: this.limiter,
-      workDir,
+      workDir, overwrite,
     });
     const origStart = seg.start.bind(seg);
     seg.start = async () => {
@@ -774,4 +862,4 @@ function clampInt(v, min, max) { return Math.min(max, Math.max(min, Math.round(N
 function readJson(p, fallback) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; } }
 function writeJson(p, data) { const tmp = p + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(data, null, 2)); fs.renameSync(tmp, p); }
 
-module.exports = { Manager, cookieHeader, DEFAULT_CONFIG };
+module.exports = { isRetriable, Manager, cookieHeader, DEFAULT_CONFIG };

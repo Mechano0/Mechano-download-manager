@@ -6,7 +6,10 @@
 #
 # Compression: Windows cabinet, LZX with the largest window (makecab, built into Windows). It takes a few minutes.
 # Your personal data (data\) is never included.
-param([switch]$Rebuild)
+#
+# Code signing (optional, see docs\CODE-SIGNING.md): -SignThumbprint <certificate thumbprint> (or env MDM_SIGN_THUMBPRINT)
+# signs Mechano DM.exe, Uninstall.exe and Setup.exe with signtool from the Windows SDK. Without it nothing is signed.
+param([switch]$Rebuild, [string]$SignThumbprint = $env:MDM_SIGN_THUMBPRINT)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $dist = Join-Path $root 'dist'
@@ -18,13 +21,25 @@ if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 New-Item -ItemType Directory -Force $work | Out-Null
 
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-$src = Join-Path $root 'desktop\Setup.cs'
+$src = @((Join-Path $root 'desktop\Setup.cs'), (Join-Path $root 'desktop\ShellProps.cs'))
 $common = @('/nologo', '/codepage:65001', '/target:winexe', '/optimize+', '/platform:x64',
   ('/win32icon:' + (Join-Path $root 'assets\mdm.ico')), '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll')
+
+function Sign-File([string]$path) {
+  if (-not $SignThumbprint) { return }
+  $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+  $tool = Get-ChildItem $kits -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+    Where-Object { $_.DirectoryName -like '*\x64' } | Sort-Object FullName -Descending | Select-Object -First 1
+  if (-not $tool) { throw 'signtool.exe not found: install the Windows SDK (Signing Tools), or build without -SignThumbprint' }
+  & $tool.FullName sign /sha1 $SignThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /d 'Mechano Download Manager' $path
+  if ($LASTEXITCODE -ne 0) { throw ('signtool failed: ' + $path) }
+}
+Sign-File (Join-Path $app 'Mechano DM.exe')
 
 # 1) Uninstall.exe = the same program without the payload
 & $csc @common ('/out:' + (Join-Path $work 'Uninstall.exe')) $src
 if ($LASTEXITCODE -ne 0) { throw 'csc failed (Uninstall.exe)' }
+Sign-File (Join-Path $work 'Uninstall.exe')
 
 # 2) Pack the program into a cabinet (things only needed for building or for the portable zip are left out)
 $skipDirs = @('desktop\', 'docs\')
@@ -57,6 +72,7 @@ $setup = Join-Path $dist 'Mechano DM Setup.exe'
 & $csc @common ('/resource:' + (Join-Path $work 'payload.cab') + ',payload.cab') ('/resource:' + (Join-Path $work 'info.txt') + ',info.txt') `
   ('/resource:' + (Join-Path $root 'assets\logo-64.png') + ',logo.png') ('/out:' + $setup) $src
 if ($LASTEXITCODE -ne 0) { throw 'csc failed (Setup.exe)' }
+Sign-File $setup
 
 Remove-Item $work -Recurse -Force
 Write-Output ('Setup: {0}  ({1:N1} MB, installs {2:N0} MB)' -f $setup, ((Get-Item $setup).Length / 1MB), ($bytes / 1MB))

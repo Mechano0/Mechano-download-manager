@@ -1,4 +1,5 @@
 'use strict';
+process.env.MDM_NO_SCAN = '1'; // no real Microsoft Defender scans during tests
 // Playlist video list (skip / include / move) and the quality choice from the "New download" window.
 const test = require('node:test');
 const assert = require('node:assert/strict');

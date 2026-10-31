@@ -171,6 +171,8 @@ static class Setup
         lt.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, lnk, new object[] { dir });
         lt.InvokeMember("Description", BindingFlags.SetProperty, null, lnk, new object[] { AppName });
         lt.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
+        // Same taskbar ID as the running app, so the taskbar shows its icon (not a blank one).
+        try { ShellProps.StampShortcut(linkPath); } catch { }
     }
 
     public static void Launch(string dir)
