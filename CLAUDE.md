@@ -40,7 +40,7 @@ History of the old chats (lost with the 2026-11-01 Windows reinstall), read it f
 - Data: `data/` (config.json has the private token — never share/copy). Downloads: `%USERPROFILE%\Downloads\M.DM\<Category>`.
 
 ## Commands
-- Tests: `tools\node\node.exe --test test/` with env `MDM_NO_SCAN=1` (45 tests, all offline).
+- Tests: `tools\node\node.exe --test test/` with env `MDM_NO_SCAN=1` (46 tests, all offline).
 - Release: bump `package.json` version → `build-setup.ps1 -Rebuild` → `node tools/sign-release.js --notes "..."` → upload `Mechano.DM.Setup.exe`,
   `Mechano.DM.zip`, `version.json` to a GitHub release `v<version>`. Small ffmpeg: artifact `ffmpeg-win64` of `.github/workflows/ffmpeg.yml` → `tools\ffmpeg\out\`.
 - Execution policy is Bypass for CurrentUser: run scripts as `powershell -File x.ps1` (no `-ExecutionPolicy` flag).
@@ -64,7 +64,8 @@ History of the old chats (lost with the 2026-11-01 Windows reinstall), read it f
   Every release must also carry the browser extension: `Mechano.DM.Extension.zip` (zip of `dist\Mechano DM Extension\`:
   Chrome folder + Mozilla-signed xpi + install steps; build it with .NET ZipArchive, forward-slash paths) and
   `mechano-dm-firefox.xpi` = `dist\mechano-dm-firefox-signed.xpi` (NOT the unsigned one). Both added to v1.1.1 on 2026-11-02.
-  Extension is now 1.3.3 (POST downloads stay in the browser), not released: the next release needs a new Mozilla-signed xpi
+  Extension is now 1.3.3 (POST/form downloads: it keeps the form body + content-type and sends them as `post` {body base64, type};
+  the engine re-sends one POST, single connection, no probe; job.post dropped when finished), not released: the next release needs a new Mozilla-signed xpi
   (the signed 1.3.2 xpi is outdated) and a rebuilt Extension.zip.
 - Git 2.56 is installed. The repo folder is owned by the old Windows user, so run git as `git -c safe.directory=* ...`
   (or Eslam adds a global safe.directory). GitHub CLI: `C:\Program Files\GitHub CLI\gh.exe` (logged in as Mechano0).

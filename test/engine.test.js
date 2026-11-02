@@ -284,3 +284,37 @@ test('local API: token, host and pairing checks; job runs end to end', async () 
     files.close(); files.closeAllConnections();
   }
 });
+
+test('POST download (a form like Autodesk Docs): one request, same body, GET refused', async () => {
+  const data = crypto.randomBytes(300 * 1024);
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      seen.push({ method: req.method, type: req.headers['content-type'], body: Buffer.concat(chunks).toString() });
+      if (req.method !== 'POST') { res.writeHead(405); return res.end(); }
+      res.writeHead(200, { 'content-type': 'application/zip', 'content-length': data.length });
+      res.end(data);
+    });
+  });
+  const base = await listen(srv);
+  const dir = tmpDir();
+  try {
+    const m = new Manager(dir);
+    m.updateConfig({ downloadDir: path.join(dir, 'M.DM'), confirmDownloads: false });
+    const body = Buffer.from('urns=a%2Cb&token=xyz').toString('base64');
+    const job = m.add({ url: `${base}/streaming?request_id=1`, kind: 'direct', filename: 'Plot.zip', confirmed: true,
+      post: { body, type: 'application/x-www-form-urlencoded' }, size: data.length });
+    for (let i = 0; i < 100 && !['done', 'error'].includes(m.get(job.id).status); i++) await sleep(50);
+    const j = m.get(job.id);
+    assert.equal(j.status, 'done', j.error);
+    assert.equal(sha(fs.readFileSync(j.file)), sha(data));
+    assert.equal(seen.length, 1, 'only one request (no GET probe)');
+    assert.equal(seen[0].method, 'POST');
+    assert.equal(seen[0].body, 'urns=a%2Cb&token=xyz');
+    assert.equal(seen[0].type, 'application/x-www-form-urlencoded');
+    assert.equal(j.post, null, 'the body is dropped once finished');
+    m.shutdown();
+  } finally { srv.close(); }
+});

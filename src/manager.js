@@ -260,12 +260,15 @@ class Manager extends EventEmitter {
       connections: spec.connections ? clampInt(spec.connections, 1, 32) : null,
       referrer: spec.referrer || null, userAgent: spec.userAgent || null,
       headers: sanitizeHeaders(spec.headers), cookies: Array.isArray(spec.cookies) ? spec.cookies.slice(0, 300) : null,
+      // a download the page made with a POST form: the body is sent again (kept only while unfinished)
+      post: kind === 'direct' ? sanitizePost(spec.post) : null,
+      size: spec.size > 0 ? Number(spec.size) : null,
       format: spec.format || null, maxHeight: spec.maxHeight ? Number(spec.maxHeight) : null,
       audioOnly: !!spec.audioOnly,
       // Whole playlist: explicit choice, or automatic for youtube.com/playlist?list=... pages
       playlist: kind === 'ytdlp' && (spec.playlist === true || (spec.playlist !== false && isPlaylistPage(spec.url))),
       startAt: spec.startAt ? new Date(spec.startAt).getTime() || null : null,
-      downloaded: 0, size: null, speed: 0, eta: null, error: null, log: [],
+      downloaded: 0, speed: 0, eta: null, error: null, log: [],
     };
     job.order = this.nextOrder(); // position in the queue (can be changed with move())
     this.jobs.set(id, job);
@@ -314,7 +317,10 @@ class Manager extends EventEmitter {
     let qualities = null; // media sites: the choices for the quality list in the popup
     let site = null, duration = null, resumable = null, thumbnail = null;
     try {
-      if (job.kind === 'direct') {
+      if (job.kind === 'direct' && job.post) {
+        // don't send the POST just to read the details: the server may make the file only once
+        size = job.size || null;
+      } else if (job.kind === 'direct') {
         const cookie = cookieHeader(job.cookies, job.url);
         if (cookie) headers.cookie = cookie;
         const info = await require('./probe').probe(job.url, { headers });
@@ -739,10 +745,12 @@ class Manager extends EventEmitter {
       url: job.url, dir: cfg.downloadDir, target: job.target, filename: job.filename, headers,
       connections: job.connections || cfg.connections, limiter: this.limiter,
       workDir, overwrite,
+      post: job.post ? { body: Buffer.from(job.post.body, 'base64'), type: job.post.type } : null, size: job.size,
     });
     const origStart = seg.start.bind(seg);
     seg.start = async () => {
-      if (!job.target) {
+      if (!job.target && job.post) seg.o.dir = dirFor(job.filename || 'download');
+      else if (!job.target) {
         const { probe } = require('./probe');
         const info = await probe(job.url, { headers });
         if (info.contentType === 'text/html' && !job.filename) {
@@ -772,6 +780,7 @@ class Manager extends EventEmitter {
   dropSecrets(job) {
     job.cookies = null;
     job.headers = {};
+    job.post = null;
     this.cleanupCookies(job);
   }
 
@@ -787,7 +796,7 @@ class Manager extends EventEmitter {
 }
 
 function publicJob(j) {
-  const { cookies, headers, ...rest } = j;
+  const { cookies, headers, post, ...rest } = j;
   return { ...rest, hasCookies: !!(cookies && cookies.length) };
 }
 
@@ -804,6 +813,13 @@ function cookieHeader(cookies, url) {
     return domainOk && pathOk && secureOk;
   }).map((c) => `${c.name}=${c.value}`);
   return pairs.length ? pairs.join('; ') : null;
+}
+
+/** POST body from the extension: { body: base64 (max 512 KB), type: content-type }. */
+function sanitizePost(p) {
+  if (!p || typeof p !== 'object' || typeof p.body !== 'string' || p.body.length > 700000 || !/^[A-Za-z0-9+/=]*$/.test(p.body)) return null;
+  const type = typeof p.type === 'string' && /^[\w.+-]+\/[\w.+-]+(;[\w\s="'.+-]*)?$/.test(p.type) ? p.type.slice(0, 200) : 'application/x-www-form-urlencoded';
+  return { body: p.body, type };
 }
 
 function sanitizeHeaders(h) {

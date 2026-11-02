@@ -60,13 +60,14 @@ async function cookiesFor(url) {
 }
 
 /** Send a URL to the app. pageUrl is used for cookies of media sites (yt-dlp). */
-async function sendToApp(url, { referrer, pageUrl, kind, filename, mime, maxHeight, audioOnly, playlist, format } = {}) {
+async function sendToApp(url, { referrer, pageUrl, kind, filename, mime, maxHeight, audioOnly, playlist, format, post, size } = {}) {
   // For media sites, cookies of the video URL's own site (lets yt-dlp see private / logged-in videos).
   const cookies = await cookiesFor(url);
   return api('/api/jobs', {
     url, kind: kind || 'auto', referrer: referrer || pageUrl || null, filename, mime, cookies,
     userAgent: navigator.userAgent, maxHeight: maxHeight || null, audioOnly: !!audioOnly, playlist: !!playlist,
     format: typeof format === 'string' && /^[\w.-]{1,40}$/.test(format) ? format : undefined,
+    post: post || undefined, size: size || undefined,
   });
 }
 
@@ -148,18 +149,71 @@ if (chrome.downloads.onDeterminingFilename) {
 }
 
 // Downloads made by a POST (a form, e.g. Autodesk Docs "Download as zip") can't be re-requested
-// with GET (the server answers 405), so they stay in the browser. Remember recent non-GET URLs.
-const postUrls = new Map(); // url -> time
+// with GET (the server answers 405). Like IDM, keep the form's body and content-type so the app
+// can send the same POST. If the body can't be rebuilt, the browser keeps the download.
+const postUrls = new Map(); // url -> { at, body?: base64, type? }
+const postById = new Map(); // requestId -> entry (content-type arrives in onBeforeSendHeaders)
+const WEB = { urls: ['http://*/*', 'https://*/*'], types: ['main_frame', 'sub_frame', 'other'] };
 chrome.webRequest.onBeforeRequest.addListener((d) => {
-  if (d.method === 'GET') return;
-  postUrls.set(d.url, Date.now());
-  if (postUrls.size > 200) postUrls.delete(postUrls.keys().next().value);
-}, { urls: ['http://*/*', 'https://*/*'], types: ['main_frame', 'sub_frame', 'other', 'xmlhttprequest'] });
+  if (d.method !== 'POST') return;
+  const entry = { at: Date.now(), form: null, raw: null };
+  const rb = d.requestBody;
+  if (rb && rb.formData) entry.form = rb.formData;
+  else if (rb && rb.raw && rb.raw.every((p) => p.bytes)) entry.raw = rb.raw.map((p) => new Uint8Array(p.bytes));
+  postUrls.set(d.url, entry);
+  postById.set(d.requestId, entry);
+  if (postUrls.size > 100) postUrls.delete(postUrls.keys().next().value);
+  if (postById.size > 100) postById.delete(postById.keys().next().value);
+}, WEB, ['requestBody']);
+chrome.webRequest.onBeforeSendHeaders.addListener((d) => {
+  const entry = postById.get(d.requestId);
+  if (!entry) return;
+  const h = (d.requestHeaders || []).find((x) => x.name.toLowerCase() === 'content-type');
+  entry.type = h ? h.value : null;
+}, WEB, ['requestHeaders']);
 chrome.webRequest.onBeforeRedirect.addListener((d) => {
-  if (postUrls.has(d.url)) postUrls.set(d.redirectUrl, Date.now()); // 307/308 keep the POST
-}, { urls: ['http://*/*', 'https://*/*'], types: ['main_frame', 'sub_frame', 'other', 'xmlhttprequest'] });
-function madeByPost(...urls) {
-  return urls.some((u) => u && Date.now() - (postUrls.get(u) || 0) < 10 * 60 * 1000);
+  // 307/308 send the POST again to the new address
+  if (postUrls.has(d.url) && [307, 308].includes(d.statusCode)) postUrls.set(d.redirectUrl, postUrls.get(d.url));
+}, WEB);
+
+function postFor(...urls) {
+  for (const u of urls) {
+    const e = u && postUrls.get(u);
+    if (e && Date.now() - e.at < 10 * 60 * 1000) return e;
+  }
+  return null;
+}
+
+function b64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+/** The POST body as { body: base64, type }, or null when it can't be rebuilt (e.g. an uploaded file). */
+function postBody(e) {
+  const enc = new TextEncoder();
+  const type = e.type || '';
+  if (e.raw) {
+    const total = e.raw.reduce((n, p) => n + p.length, 0);
+    const all = new Uint8Array(total);
+    let at = 0;
+    for (const p of e.raw) { all.set(p, at); at += p.length; }
+    return { body: b64(all), type: type || 'application/octet-stream' };
+  }
+  if (!e.form) return { body: '', type: 'application/x-www-form-urlencoded' };
+  if (/multipart\/form-data/i.test(type)) {
+    const boundary = '----MechanoDM' + Math.random().toString(16).slice(2);
+    let s = '';
+    for (const [k, vals] of Object.entries(e.form)) for (const v of vals) {
+      s += `--${boundary}\r\nContent-Disposition: form-data; name="${k.replace(/"/g, '%22')}"\r\n\r\n${v}\r\n`;
+    }
+    s += `--${boundary}--\r\n`;
+    return { body: b64(enc.encode(s)), type: `multipart/form-data; boundary=${boundary}` };
+  }
+  const p = new URLSearchParams();
+  for (const [k, vals] of Object.entries(e.form)) for (const v of vals) p.append(k, v);
+  return { body: b64(enc.encode(p.toString())), type: 'application/x-www-form-urlencoded' };
 }
 
 async function takeOver(item) {
@@ -167,7 +221,9 @@ async function takeOver(item) {
   if (!c.intercept || item.byExtensionId === chrome.runtime.id) return false;
   const url = item.finalUrl || item.url;
   if (!/^https?:/i.test(url)) return false; // blob:, data:, file: stay in the browser
-  if (madeByPost(item.url, item.finalUrl)) return false; // needs the page's own POST: browser keeps it
+  const postEntry = postFor(item.url, item.finalUrl);
+  const post = postEntry ? postBody(postEntry) : null;
+  if (post && post.body.length > 700000) return false; // too big to hand over: the browser keeps it
   const ext = (item.filename.split('.').pop() || '').toLowerCase();
   const list = c.exts.toLowerCase().split(/[\s,;]+/).filter(Boolean);
   if (!list.includes(ext)) return false;
@@ -176,7 +232,10 @@ async function takeOver(item) {
   await chrome.downloads.cancel(item.id).catch(() => {});
   chrome.downloads.erase({ id: item.id }).catch(() => {});
   const name = item.filename.split(/[\\/]/).pop();
-  await sendToApp(url, { referrer: item.referrer, filename: name, mime: item.mime });
+  await sendToApp(postEntry ? item.url : url, {
+    referrer: item.referrer, filename: name, mime: item.mime,
+    kind: post ? 'direct' : undefined, post, size: item.totalBytes > 0 ? item.totalBytes : undefined,
+  });
   return true;
 }
 

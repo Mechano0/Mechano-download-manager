@@ -58,7 +58,11 @@ class SegmentedDownload extends EventEmitter {
     this.stopped = false;
     this.ac = new AbortController();
     const o = this.o;
-    const info = await probe(o.url, { headers: o.headers, signal: this.ac.signal });
+    // POST (a download made by a form): no separate probe, the server may make the file only once.
+    // One connection; name and size come from the download's own answer.
+    const info = o.post
+      ? { finalUrl: o.url, size: o.size || null, resumable: false, filename: o.filename || 'download', etag: null, lastModified: null }
+      : await probe(o.url, { headers: o.headers, signal: this.ac.signal });
     this.info = info;
     this.url = info.finalUrl;
     this.size = info.size;
@@ -230,7 +234,13 @@ class SegmentedDownload extends EventEmitter {
         if (this.validator) headers['if-range'] = this.validator;
       }
       const reqEnd = maxReq && isFinite(seg.end) ? Math.min(seg.end, seg.pos + maxReq - 1) : seg.end;
-      const { res } = await request(this.url, { headers, signal: this.ac.signal });
+      const post = this.o.post;
+      if (post && post.type) headers['content-type'] = post.type;
+      const { res } = await request(this.url, { headers, signal: this.ac.signal, method: post ? 'POST' : 'GET', body: post ? post.body : null });
+      if (post && res.statusCode === 200 && !this.size) {
+        const n = Number(res.headers['content-length']);
+        if (n > 0) { this.size = n; this.emit('meta', { target: this.target, size: n, resumable: false, filename: path.basename(this.target) }); }
+      }
       if (res.statusCode === 200 && headers.range) {
         res.destroy();
         if (this.validator && this.info.resumable) throw new EntityChanged();

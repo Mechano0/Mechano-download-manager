@@ -30,17 +30,21 @@ function normalizeHeaders(h) {
  * Open a request and resolve with the first non-redirect response.
  * @returns {Promise<{res: http.IncomingMessage, url: string}>}
  */
-function request(url, { method = 'GET', headers = {}, timeout = 30000, maxRedirects = 10, signal } = {}) {
+function request(url, { method = 'GET', headers = {}, body = null, timeout = 30000, maxRedirects = 10, signal } = {}) {
   const base = { 'user-agent': DEFAULT_UA, accept: '*/*', 'accept-encoding': 'identity', ...normalizeHeaders(headers) };
   const originHost = new URL(url).host;
 
   return new Promise((resolve, reject) => {
     let redirects = 0;
-    const go = (current, verb) => {
+    // body: a Buffer sent with POST (downloads a page made with a form). Like a browser, a 301/302/303
+    // redirect turns the POST into a GET without the body; 307/308 send it again.
+    const go = (current, verb, payload) => {
       let u;
       try { u = new URL(current); } catch (e) { return reject(e); }
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return reject(new Error(`Unsupported protocol ${u.protocol}`));
       const hdrs = { ...base };
+      if (payload) hdrs['content-length'] = String(payload.length);
+      else delete hdrs['content-type'];
       // Never leak cookies/credentials to a different host after a redirect (e.g. to a CDN).
       if (u.host !== originHost) { delete hdrs.cookie; delete hdrs.authorization; }
       const mod = u.protocol === 'https:' ? https : http;
@@ -52,13 +56,14 @@ function request(url, { method = 'GET', headers = {}, timeout = 30000, maxRedire
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && loc) {
           res.resume();
           if (++redirects > maxRedirects) return reject(new Error('Too many redirects'));
-          return go(new URL(loc, current).href, res.statusCode === 303 ? 'GET' : verb);
+          const keep = [307, 308].includes(res.statusCode);
+          return go(new URL(loc, current).href, keep ? verb : (verb === 'POST' || res.statusCode === 303 ? 'GET' : verb), keep ? payload : null);
         }
         resolve({ res, url: current });
       });
-      req.end();
+      req.end(payload || undefined);
     };
-    go(url, method);
+    go(url, method, body && body.length ? body : null);
   });
 }
 
