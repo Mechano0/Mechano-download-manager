@@ -57,6 +57,9 @@ History of the old chats (lost with the 2026-11-01 Windows reinstall), read it f
 - Node.js is not installed system-wide; builds use `tools\node\node.exe` (v26.12.0, gitignored). v1.1.1 (new key) built + signed 2026-11-01,
   copies in `D:\cloude project\Mechano Download Manager\02-final product\release\`. Source pushed to `main` (8140e4a) and
   GitHub release `v1.1.1` published 2026-11-01 (Setup.exe, zip, version.json; live feed checked, signature OK).
+  Every release must also carry the browser extension: `Mechano.DM.Extension.zip` (zip of `dist\Mechano DM Extension\`:
+  Chrome folder + Mozilla-signed xpi + install steps; build it with .NET ZipArchive, forward-slash paths) and
+  `mechano-dm-firefox.xpi` = `dist\mechano-dm-firefox-signed.xpi` (NOT the unsigned one). Both added to v1.1.1 on 2026-11-02.
 - Git 2.56 is installed. The repo folder is owned by the old Windows user, so run git as `git -c safe.directory=* ...`
   (or Eslam adds a global safe.directory). GitHub CLI: `C:\Program Files\GitHub CLI\gh.exe` (logged in as Mechano0).
   Releases: `gh release create v<ver> -R Mechano0/Mechano-download-manager` with assets named with dots (copy them first).
