@@ -147,11 +147,27 @@ if (chrome.downloads.onDeterminingFilename) {
   });
 }
 
+// Downloads made by a POST (a form, e.g. Autodesk Docs "Download as zip") can't be re-requested
+// with GET (the server answers 405), so they stay in the browser. Remember recent non-GET URLs.
+const postUrls = new Map(); // url -> time
+chrome.webRequest.onBeforeRequest.addListener((d) => {
+  if (d.method === 'GET') return;
+  postUrls.set(d.url, Date.now());
+  if (postUrls.size > 200) postUrls.delete(postUrls.keys().next().value);
+}, { urls: ['http://*/*', 'https://*/*'], types: ['main_frame', 'sub_frame', 'other', 'xmlhttprequest'] });
+chrome.webRequest.onBeforeRedirect.addListener((d) => {
+  if (postUrls.has(d.url)) postUrls.set(d.redirectUrl, Date.now()); // 307/308 keep the POST
+}, { urls: ['http://*/*', 'https://*/*'], types: ['main_frame', 'sub_frame', 'other', 'xmlhttprequest'] });
+function madeByPost(...urls) {
+  return urls.some((u) => u && Date.now() - (postUrls.get(u) || 0) < 10 * 60 * 1000);
+}
+
 async function takeOver(item) {
   const c = await cfg();
   if (!c.intercept || item.byExtensionId === chrome.runtime.id) return false;
   const url = item.finalUrl || item.url;
   if (!/^https?:/i.test(url)) return false; // blob:, data:, file: stay in the browser
+  if (madeByPost(item.url, item.finalUrl)) return false; // needs the page's own POST: browser keeps it
   const ext = (item.filename.split('.').pop() || '').toLowerCase();
   const list = c.exts.toLowerCase().split(/[\s,;]+/).filter(Boolean);
   if (!list.includes(ext)) return false;

@@ -64,6 +64,8 @@ History of the old chats (lost with the 2026-11-01 Windows reinstall), read it f
   Every release must also carry the browser extension: `Mechano.DM.Extension.zip` (zip of `dist\Mechano DM Extension\`:
   Chrome folder + Mozilla-signed xpi + install steps; build it with .NET ZipArchive, forward-slash paths) and
   `mechano-dm-firefox.xpi` = `dist\mechano-dm-firefox-signed.xpi` (NOT the unsigned one). Both added to v1.1.1 on 2026-11-02.
+  Extension is now 1.3.3 (POST downloads stay in the browser), not released: the next release needs a new Mozilla-signed xpi
+  (the signed 1.3.2 xpi is outdated) and a rebuilt Extension.zip.
 - Git 2.56 is installed. The repo folder is owned by the old Windows user, so run git as `git -c safe.directory=* ...`
   (or Eslam adds a global safe.directory). GitHub CLI: `C:\Program Files\GitHub CLI\gh.exe` (logged in as Mechano0).
   Releases: `gh release create v<ver> -R Mechano0/Mechano-download-manager` with assets named with dots (copy them first).

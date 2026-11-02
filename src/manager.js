@@ -348,7 +348,9 @@ class Manager extends EventEmitter {
         name = name || (filenameFromUrl(job.url) || 'video').replace(/\.m3u8?$/i, '') + '.mp4';
       }
     } catch (e) {
-      note = `Could not read the details (${e.message}). You can still start the download.`;
+      note = e.status === 405
+        ? 'This site only gives this file to the browser (HTTP 405: the page made it with its own request). Download it in the browser instead.'
+        : `Could not read the details (${e.message}). You can still start the download.`;
     }
     name = name || filenameFromUrl(job.url) || job.url;
     const category = this.categoryOf(job, name);

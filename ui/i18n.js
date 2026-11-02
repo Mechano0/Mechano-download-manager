@@ -35,6 +35,7 @@
     'Save to needs a full folder path, like D:\\Downloads': 'حفظ في محتاج مسار فولدر كامل، زي D:\\Downloads',
     'A file name can\'t contain \\ / : * ? " < > |': 'اسم الملف ما ينفعش يكون فيه \\ / : * ? " < > |',
     'Choose a full folder path, like D:\\Videos': 'اختار مسار فولدر كامل، زي D:\\Videos',
+    'This site only gives this file to the browser (HTTP 405: the page made it with its own request). Download it in the browser instead.': 'الموقع ده بيدّي الملف للمتصفح بس (HTTP 405: الصفحة عملته بطلب خاص بيها). حمّله من المتصفح.',
     'This link is a web page; the video on it will be downloaded with yt-dlp.': 'الرابط ده صفحة ويب؛ الفيديو اللي فيها هيتحمّل بـ yt-dlp.',
 
     // ---- main window: header + popups
