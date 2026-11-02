@@ -131,6 +131,18 @@ function createServer(manager, { updater = null, scheduler = null, selfUpdater =
       }
       if (req.method === 'GET' && url.pathname === '/api/jobs') return send(res, 200, manager.list());
       if (req.method === 'GET' && url.pathname === '/api/stats') return send(res, 200, manager.stats.summary());
+      if (req.method === 'GET' && url.pathname === '/api/wait-confirm') {
+        // Mechano DM.exe waits here: answered the moment a download needs the "Download File Info"
+        // window (or after 25 s), so the window opens at once instead of on the next 1-second check.
+        return await new Promise((resolve) => {
+          let timer;
+          const onJob = (j) => { if (j.status === 'confirm') finish(true); };
+          const finish = (hit) => { clearTimeout(timer); manager.off('job', onJob); resolve(send(res, 200, { confirm: hit })); };
+          timer = setTimeout(() => finish(false), 25000);
+          manager.on('job', onJob);
+          req.on('close', () => { clearTimeout(timer); manager.off('job', onJob); });
+        });
+      }
       if (url.pathname === '/api/host') {
         // Mechano DM.exe says "I'm here" every few seconds: it shows the download/complete popups itself.
         if (req.method === 'POST') manager.hostSeenAt = Date.now();

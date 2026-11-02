@@ -95,6 +95,7 @@ class MediaDownload extends EventEmitter {
         const expired = err instanceof HttpError && [403, 404, 410].includes(err.status);
         if (this.userPaused || !expired || resolved > 1 || this.bytesDone() === 0) throw err;
         this.emit('log', 'The video links expired; getting fresh ones and continuing');
+        this.o = { ...this.o, noCache: true }; // not the 10-minute cached answer: really fresh links
       }
     }
   }

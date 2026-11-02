@@ -35,12 +35,16 @@ History of the old chats (lost with the 2026-11-01 Windows reinstall), read it f
   ("Download File Info" window: own WebView2 window `WebConfirmForm` in the app, iframe in the page; old WinForms `ConfirmForm` = fallback),
   `ui/i18n.js` (Arabic + RTL: exact-string dictionary + regex patterns + MutationObserver; mark names/paths `translate="no"`).
   Server injects `__MDM_TOKEN__` and `__MDM_LANG__`. Extension (MV3, Chrome/Edge): `extension/`; Firefox: `node tools/build-firefox.js`.
+- Fast start (2026-11-02): the details window probe is kept on `job.probe` (3 min) and passed to SegmentedDownload as `o.info`;
+  without it, the probe runs with `keepOpen` and its answer is the first segment (`firstRes`), so Start costs no extra request.
+  yt-dlp `-J` answers are cached 10 min per link (`infoCache` in ytdlp.js); `resolve()` reuses them with `--load-info-json`
+  (`noCache` after expired links). C# waits on `/api/wait-confirm` (long poll) so the dialog opens at once; `WebConfirmForm.Prewarm()`.
 - Unfinished pieces (.mdmpart, HLS segments, yt-dlp .part/-Frag via `-P temp:`) live in `data\work\<job id>`, never in the save folder;
   removing an unfinished job always deletes them (manager.removePartials), finished jobs clean it, startup prunes orphans.
 - Data: `data/` (config.json has the private token — never share/copy). Downloads: `%USERPROFILE%\Downloads\M.DM\<Category>`.
 
 ## Commands
-- Tests: `tools\node\node.exe --test test/` with env `MDM_NO_SCAN=1` (46 tests, all offline).
+- Tests: `tools\node\node.exe --test test/` with env `MDM_NO_SCAN=1` (47 tests, all offline).
 - Release: bump `package.json` version → `build-setup.ps1 -Rebuild` → `node tools/sign-release.js --notes "..."` → upload `Mechano.DM.Setup.exe`,
   `Mechano.DM.zip`, `version.json` to a GitHub release `v<version>`. Small ffmpeg: artifact `ffmpeg-win64` of `.github/workflows/ffmpeg.yml` → `tools\ffmpeg\out\`.
 - Execution policy is Bypass for CurrentUser: run scripts as `powershell -File x.ps1` (no `-ExecutionPolicy` flag).

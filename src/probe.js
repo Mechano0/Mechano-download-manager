@@ -5,10 +5,12 @@ const path = require('node:path');
 const { request, HttpError } = require('./http');
 const { filenameFromDisposition, filenameFromUrl, extFromMime, sanitizeFilename } = require('./util');
 
-async function probe(url, { headers = {}, signal, timeout } = {}) {
+// keepOpen: the answer's body (the file from byte 0) is returned as info.res, so a download can
+// start writing it at once instead of asking the server again (what IDM does).
+async function probe(url, { headers = {}, signal, timeout, keepOpen = false } = {}) {
   const { res, url: finalUrl } = await request(url, { headers: { ...headers, range: 'bytes=0-' }, signal, timeout });
-  res.destroy(); // headers are all we need
   const h = res.headers;
+  if (res.statusCode >= 400 || !keepOpen || (res.statusCode !== 200 && res.statusCode !== 206)) res.destroy(); // headers are all we need
   if (res.statusCode >= 400) throw new HttpError(res.statusCode, finalUrl);
 
   let size = null;
@@ -37,6 +39,7 @@ async function probe(url, { headers = {}, signal, timeout } = {}) {
     etag,
     lastModified: h['last-modified'] || null,
     status: res.statusCode,
+    res: res.destroyed ? null : res,
   };
 }
 

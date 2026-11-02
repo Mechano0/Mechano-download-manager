@@ -377,7 +377,7 @@ async function load() {
   $('#url').title = job.url;
   $('#fileName').value = job.filename || '';
   $('#category').innerHTML = `<option>${esc(T('General'))}</option>`; // real list arrives with the details
-  showSize(job.total);
+  showSize(job.size || job.total); // the browser already knows the size: show it before the server answers
   drawType((job.filename || '').split('.').pop(), 'General');
   try {
     d = await api(`/api/jobs/${job.id}/details`, {});

@@ -189,8 +189,31 @@ async function completeFormats(url, formats) {
   }));
 }
 
-/** List title + formats without downloading. */
+// yt-dlp needs 3-10 s per look at a video. The browser button, the details window and the
+// download itself all ask about the same link within seconds, so the answer is kept 10 minutes
+// (the video links inside stay valid for hours) and a download reuses it with --load-info-json.
+const INFO_TTL = 10 * 60 * 1000;
+const infoCache = new Map(); // url -> { at, raw (yt-dlp's JSON text), data }
+const infoInFlight = new Map(); // url -> promise: two asks at the same time run yt-dlp once
+function cachedInfo(url) {
+  const e = infoCache.get(url);
+  if (e && Date.now() - e.at < INFO_TTL) return e;
+  if (e) infoCache.delete(url);
+  return null;
+}
+function clearInfoCache() { infoCache.clear(); }
+
+/** List title + formats without downloading (cached 10 minutes per link). */
 function info(url, o) {
+  const hit = cachedInfo(url);
+  if (hit) return Promise.resolve(hit.data);
+  if (infoInFlight.has(url)) return infoInFlight.get(url);
+  const p = readInfo(url, o).finally(() => infoInFlight.delete(url));
+  infoInFlight.set(url, p);
+  return p;
+}
+
+function readInfo(url, o) {
   return warmUp(o.ytdlp).then(() => new Promise((resolve, reject) => {
     if (!o.ytdlp) return reject(new Error('yt-dlp was not found. See README: "Install yt-dlp".'));
     const p = spawn(o.ytdlp, [...baseArgs({ ...o, url }), '-J', url], { windowsHide: true });
@@ -205,7 +228,7 @@ function info(url, o) {
       if (code !== 0) return reject(new Error(lastError(err) || `yt-dlp exited with ${code}`));
       try {
         const j = JSON.parse(out);
-        completeFormats(url, j.formats || []).then(() => resolve({
+        completeFormats(url, j.formats || []).then(() => resolve(remember(url, out, {
           title: cleanTitle(j.title, url, j.description, j.id), id: j.id, extractor: j.extractor_key, duration: j.duration, thumbnail: j.thumbnail,
           uploader: j.uploader, webpage_url: j.webpage_url,
           formats: (j.formats || []).filter((f) => f.format_id && !/storyboard|mhtml/.test(f.ext || '') && f.protocol !== 'mhtml').map((f) => ({
@@ -213,10 +236,16 @@ function info(url, o) {
             vcodec: f.vcodec, acodec: f.acodec, size: f.filesize || f.filesize_approx || null,
             tbr: f.tbr || null, note: f.format_note || '', protocol: f.protocol, probed: !!f.probed,
           })),
-        }), reject);
+        })), reject);
       } catch (e) { reject(e); }
     });
   }));
+}
+
+function remember(url, raw, data) {
+  infoCache.set(url, { at: Date.now(), raw, data });
+  if (infoCache.size > 30) infoCache.delete(infoCache.keys().next().value);
+  return data;
 }
 
 /** True for links that point at a playlist (YouTube list=..., /playlist pages). */
@@ -305,11 +334,24 @@ function outTemplate(o) {
  * it picked (requested_formats), their direct links + headers, and the final file name.
  */
 function resolve(o) {
+  // The link was looked at a moment ago: pick the formats from that answer (no new extraction).
+  const hit = !o.noCache && cachedInfo(o.url);
+  if (hit) {
+    const file = path.join(o.workDir || o.dir, 'mdm-info-' + process.pid + '-' + Date.now() + '.json');
+    try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, hit.raw); } catch { return resolveOnce({ ...o, noCache: true }); }
+    return resolveOnce({ ...o, infoFile: file })
+      .catch(() => resolveOnce({ ...o, noCache: true })) // old answer refused: ask yt-dlp normally
+      .finally(() => fs.rmSync(file, { force: true }));
+  }
+  return resolveOnce(o);
+}
+
+function resolveOnce(o) {
   return new Promise((resolveP, reject) => {
     if (!o.ytdlp) return reject(new Error('yt-dlp was not found. See README: "Install yt-dlp".'));
     // line 1: the final file name (with the merged extension), line 2: the info as JSON
     const args = [...baseArgs(o), ...selectionArgs(o), '-P', o.dir, '-o', outTemplate(o),
-      '--print', 'filename', '--print', '%()j', o.url];
+      '--print', 'filename', '--print', '%()j', ...(o.infoFile ? ['--load-info-json', o.infoFile] : [o.url])];
     const p = spawn(o.ytdlp, args, { windowsHide: true });
     let out = '';
     let err = '';
@@ -471,4 +513,5 @@ class YtdlpDownload extends EventEmitter {
 module.exports = {
   YtdlpDownload, info, playlistInfo, isPlaylistUrl, findTool, resetToolCache, resetRuntimeCache,
   writeCookiesFile, defaultFormat, toolVersion, isFolderBuild, warmUp, probeMp4, resolve, selectionArgs, cleanTitle,
+  clearInfoCache,
 };

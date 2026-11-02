@@ -111,7 +111,7 @@ test('server without range support falls back to one connection', async () => {
     const d = new SegmentedDownload({ url: `${base}/x`, dir, connections: 8 });
     const r = await d.start();
     assert.equal(sha(fs.readFileSync(r.file)), sha(data));
-    assert.equal(stats.requests, 2, 'one probe + exactly one download connection');
+    assert.equal(stats.requests, 1, 'the probe answer itself is the download: one request only');
   } finally { srv.close(); srv.closeAllConnections(); }
 });
 
@@ -317,4 +317,33 @@ test('POST download (a form like Autodesk Docs): one request, same body, GET ref
     assert.equal(j.post, null, 'the body is dropped once finished');
     m.shutdown();
   } finally { srv.close(); }
+});
+
+test('wait-confirm answers the moment a download needs the details window; details are kept for Start', async () => {
+  const data = crypto.randomBytes(1024 * 1024);
+  const { srv: files, stats } = fileServer(data, { name: 'setup.exe' });
+  const fileBase = await listen(files);
+  const dataDir = tmpDir();
+  const m = new Manager(dataDir);
+  m.updateConfig({ downloadDir: path.join(dataDir, 'downloads') });
+  const app = createServer(m);
+  const base = await listen(app);
+  try {
+    const t0 = Date.now();
+    const waiting = fetch(`${base}/api/wait-confirm`, { headers: { 'x-mdm-token': m.config.token } }).then((r) => r.json());
+    await sleep(50);
+    const job = m.add({ url: `${fileBase}/setup.exe`, size: data.length });
+    assert.deepEqual(await waiting, { confirm: true });
+    assert.ok(Date.now() - t0 < 1000, 'answered at once, not after the 25 s wait');
+    assert.equal(m.list().find((j) => j.id === job.id).size, data.length, 'the size from the browser shows before the server answers');
+    await m.details(job.id);
+    const before = stats.requests;
+    const done = new Promise((resolve) => m.on('job', (j) => j.id === job.id && ['done', 'error'].includes(j.status) && resolve(j)));
+    m.confirm(job.id, {});
+    const j = await done;
+    assert.equal(j.status, 'done', j.error);
+    assert.equal(sha(fs.readFileSync(j.file)), sha(data));
+    assert.ok(stats.requests - before <= 8, 'Start does not ask the server about the file again');
+    assert.equal(stats.ranged, stats.requests, 'every request after the probe downloads data');
+  } finally { app.close(); files.close(); files.closeAllConnections(); m.shutdown(); }
 });

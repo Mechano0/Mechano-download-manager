@@ -60,9 +60,17 @@ class SegmentedDownload extends EventEmitter {
     const o = this.o;
     // POST (a download made by a form): no separate probe, the server may make the file only once.
     // One connection; name and size come from the download's own answer.
+    // o.info: the details window already asked the server (used once, then dropped).
     const info = o.post
       ? { finalUrl: o.url, size: o.size || null, resumable: false, filename: o.filename || 'download', etag: null, lastModified: null }
-      : await probe(o.url, { headers: o.headers, signal: this.ac.signal });
+      : o.info || await probe(o.url, { headers: o.headers, signal: this.ac.signal, keepOpen: true });
+    o.info = null;
+    this.firstRes = info.res || null; // the probe's own answer = the file from byte 0
+    delete info.res;
+    try {
+      if (o.beforeStart) await o.beforeStart(info); // the manager picks the folder (or stops: web page)
+    } catch (e) { this.dropFirst(); throw e; }
+    if (this.userPaused) { this.dropFirst(); return { paused: true }; }
     this.info = info;
     this.url = info.finalUrl;
     this.size = info.size;
@@ -99,7 +107,12 @@ class SegmentedDownload extends EventEmitter {
       this.segments = [{ start: 0, end: this.single ? Infinity : info.size - 1, pos: 0 }];
     }
     this.validator = info.etag || info.lastModified;
-    return this.run(!sameEntity);
+    if (!this.segments.some((s) => s.start === 0 && s.pos === 0)) this.dropFirst(); // resuming: not needed
+    try { return await this.run(!sameEntity); } finally { this.dropFirst(); }
+  }
+
+  dropFirst() {
+    if (this.firstRes) { this.firstRes.destroy(); this.firstRes = null; }
   }
 
   async run(fresh) {
@@ -236,18 +249,25 @@ class SegmentedDownload extends EventEmitter {
       const reqEnd = maxReq && isFinite(seg.end) ? Math.min(seg.end, seg.pos + maxReq - 1) : seg.end;
       const post = this.o.post;
       if (post && post.type) headers['content-type'] = post.type;
-      const { res } = await request(this.url, { headers, signal: this.ac.signal, method: post ? 'POST' : 'GET', body: post ? post.body : null });
-      if (post && res.statusCode === 200 && !this.size) {
-        const n = Number(res.headers['content-length']);
-        if (n > 0) { this.size = n; this.emit('meta', { target: this.target, size: n, resumable: false, filename: path.basename(this.target) }); }
+      let res;
+      if (this.firstRes && seg.pos === 0) {
+        // the probe's answer already carries the file from byte 0: no second request
+        res = this.firstRes;
+        this.firstRes = null;
+      } else {
+        ({ res } = await request(this.url, { headers, signal: this.ac.signal, method: post ? 'POST' : 'GET', body: post ? post.body : null }));
+        if (post && res.statusCode === 200 && !this.size) {
+          const n = Number(res.headers['content-length']);
+          if (n > 0) { this.size = n; this.emit('meta', { target: this.target, size: n, resumable: false, filename: path.basename(this.target) }); }
+        }
+        if (res.statusCode === 200 && headers.range) {
+          res.destroy();
+          if (this.validator && this.info.resumable) throw new EntityChanged();
+          throw new RangeUnsupported();
+        }
+        if (res.statusCode >= 400) { res.resume(); throw new HttpError(res.statusCode, this.url); }
+        if (res.statusCode !== 200 && res.statusCode !== 206) { res.resume(); throw new Error(`Unexpected HTTP ${res.statusCode}`); }
       }
-      if (res.statusCode === 200 && headers.range) {
-        res.destroy();
-        if (this.validator && this.info.resumable) throw new EntityChanged();
-        throw new RangeUnsupported();
-      }
-      if (res.statusCode >= 400) { res.resume(); throw new HttpError(res.statusCode, this.url); }
-      if (res.statusCode !== 200 && res.statusCode !== 206) { res.resume(); throw new Error(`Unexpected HTTP ${res.statusCode}`); }
 
       for await (const chunk of res) {
         if (this.stopped) { res.destroy(); return; }

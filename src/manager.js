@@ -324,6 +324,8 @@ class Manager extends EventEmitter {
         const cookie = cookieHeader(job.cookies, job.url);
         if (cookie) headers.cookie = cookie;
         const info = await require('./probe').probe(job.url, { headers });
+        // kept for a few minutes: Start uses it instead of asking the server again
+        job.probe = { ...info, res: undefined, at: Date.now() };
         name = job.filename || info.filename;
         size = info.size;
         resumable = info.resumable;
@@ -746,24 +748,21 @@ class Manager extends EventEmitter {
       connections: job.connections || cfg.connections, limiter: this.limiter,
       workDir, overwrite,
       post: job.post ? { body: Buffer.from(job.post.body, 'base64'), type: job.post.type } : null, size: job.size,
-    });
-    const origStart = seg.start.bind(seg);
-    seg.start = async () => {
-      if (!job.target && job.post) seg.o.dir = dirFor(job.filename || 'download');
-      else if (!job.target) {
-        const { probe } = require('./probe');
-        const info = await probe(job.url, { headers });
-        if (info.contentType === 'text/html' && !job.filename) {
+      // what the details window found (if recent): no second question to the server
+      info: !job.target && job.probe && Date.now() - job.probe.at < 3 * 60 * 1000 ? { ...job.probe } : null,
+      // after the server answered: pick the folder, or hand a web page over to yt-dlp
+      beforeStart: async (info) => {
+        if (job.target) return;
+        if (!job.post && info.contentType === 'text/html' && !job.filename) {
           if (!tools.ytdlp) throw new Error('This link is a web page, not a file. Install yt-dlp to grab videos from pages, or use the browser extension to capture the media link.');
           job._switchToYtdlp = true;
           job.log.push('Link is a web page; handing over to yt-dlp');
           const e = new Error('web page'); e.code = 'MDM_WEBPAGE'; throw e;
         }
         seg.o.dir = dirFor(job.filename || info.filename);
-      }
-      if (seg.userPaused) return { paused: true }; // paused while probing
-      return origStart();
-    };
+      },
+    });
+    job.probe = null; // used once
     return seg;
   }
 
@@ -796,7 +795,7 @@ class Manager extends EventEmitter {
 }
 
 function publicJob(j) {
-  const { cookies, headers, post, ...rest } = j;
+  const { cookies, headers, post, probe, ...rest } = j;
   return { ...rest, hasCookies: !!(cookies && cookies.length) };
 }
 

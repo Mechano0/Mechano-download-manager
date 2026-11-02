@@ -272,7 +272,7 @@ class Host : ApplicationContext
     IntPtr killJob = IntPtr.Zero;
     MainForm main;
     IConfirmWindow confirm;
-    bool exiting, first = true, pollBusy, toldAboutTray;
+    bool exiting, first = true, pollBusy, pollAgain, toldAboutTray;
     int ticks, restarts, pollFailures;
     bool showComplete = true;
     double warnedAt;
@@ -397,6 +397,28 @@ class Host : ApplicationContext
         tray.Text = Program.Title;
         poll.Start();
         if (!background) ShowMain();
+        WebConfirmForm.Prewarm(); // the first "Download File Info" window opens faster
+        // The engine answers /api/wait-confirm the moment a new download arrives: check right away.
+        var waiter = new Thread(() =>
+        {
+            while (!exiting)
+            {
+                try
+                {
+                    var r = api.Get("/api/wait-confirm", 35000) as Dictionary<string, object>;
+                    if (r != null && r.ContainsKey("confirm") && Convert.ToBoolean(r["confirm"])) invoker.BeginInvoke((Action)PollNow);
+                }
+                catch { Thread.Sleep(3000); } // engine restarting: the 1-second check still works
+            }
+        });
+        waiter.IsBackground = true;
+        waiter.Start();
+    }
+
+    void PollNow()
+    {
+        if (pollBusy) pollAgain = true;
+        else Poll();
     }
 
     void EngineExited()
@@ -465,7 +487,7 @@ class Host : ApplicationContext
             {
                 try { Handle(jobs as object[], sched as Dictionary<string, object>); }
                 catch (Exception ex) { Program.Log("handle failed: " + ex); }
-                finally { pollBusy = false; }
+                finally { pollBusy = false; if (pollAgain) { pollAgain = false; Poll(); } }
             }));
         });
     }
@@ -983,17 +1005,25 @@ class WebConfirmForm : PopupForm, IConfirmWindow
         PerformAutoScale();
     }
 
+    static string WebDataFolder()
+    {
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"MechanoDM\webview");
+    }
+
+    /** Make the WebView2 environment at start-up, so the first window doesn't wait for it. */
+    public static async void Prewarm()
+    {
+        try { if (env == null && !Broken) env = await CoreWebView2Environment.CreateAsync(null, WebDataFolder()); }
+        catch (Exception ex) { Program.Log("WebView2 prewarm: " + ex.Message); }
+    }
+
     async Task InitWeb()
     {
         try
         {
             web = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = BackColor };
             Controls.Add(web);
-            if (env == null)
-            {
-                string data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"MechanoDM\webview");
-                env = await CoreWebView2Environment.CreateAsync(null, data);
-            }
+            if (env == null) env = await CoreWebView2Environment.CreateAsync(null, WebDataFolder());
             await web.EnsureCoreWebView2Async(env);
             var s = web.CoreWebView2.Settings;
             s.AreDevToolsEnabled = false;
