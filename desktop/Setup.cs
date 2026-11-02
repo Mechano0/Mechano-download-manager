@@ -10,7 +10,8 @@
 //   without the payload -> "Uninstall.exe" (shipped inside the install folder)
 //
 // Command line (handy for testing):
-//   Setup.exe /silent [/dir=<folder>] [/nolaunch] [/nodesktop]     install without the window
+//   Setup.exe /silent [/dir=<folder>] [/nolaunch] [/nodesktop] [/nostartup]   install without the window
+//   "Start with Windows" (Startup shortcut, -Background): on by default for a new install; an update keeps the user's choice.
 //   Uninstall.exe [/silent]                                         remove the program
 using System;
 using System.Collections.Generic;
@@ -56,7 +57,10 @@ static class Setup
             foreach (string a in args) if (a.StartsWith("/dir=", StringComparison.OrdinalIgnoreCase)) dir = NormalizeDir(a.Substring(5).Trim('"'));
             try
             {
-                Install(dir, !HasArg(args, "/nodesktop"), delegate (int p, string s) { });
+                // New install: start with Windows unless /nostartup. Update: keep what the user chose.
+                // /nostartup (tests): leave the Startup shortcut exactly as it is.
+                bool? startup = HasArg(args, "/nostartup") ? (bool?)null : (!IsInstalled(dir) || StartupOn());
+                Install(dir, !HasArg(args, "/nodesktop"), startup, delegate (int p, string s) { });
                 if (!HasArg(args, "/nolaunch")) Launch(dir);
                 return 0;
             }
@@ -136,6 +140,18 @@ static class Setup
         return Path.Combine(Environment.GetFolderPath(folder), LinkName);
     }
 
+    // Is Mechano DM already installed in this folder (so this run is an update)?
+    public static bool IsInstalled(string dir)
+    {
+        try { return File.Exists(Path.Combine(dir, ExeName)) || File.Exists(Path.Combine(dir, Manifest)); } catch { return false; }
+    }
+
+    // "Start with Windows" is on when the Startup shortcut exists (the same one the tray menu makes).
+    public static bool StartupOn()
+    {
+        return File.Exists(LinkPath(Environment.SpecialFolder.Startup));
+    }
+
     // Closes Mechano DM (and the tools it runs) when it is running from this folder,
     // so its files can be replaced or removed.
     static void CloseRunningApp(string dir)
@@ -182,7 +198,8 @@ static class Setup
 
     // ---------- install ----------
 
-    public static void Install(string dir, bool desktopLink, Action<int, string> progress)
+    // startupLink: true = make the "Start with Windows" shortcut, false = remove it, null = leave it alone.
+    public static void Install(string dir, bool desktopLink, bool? startupLink, Action<int, string> progress)
     {
         // 1) Make sure we can write there (Program Files, for example, needs admin rights).
         try
@@ -220,6 +237,9 @@ static class Setup
         string exe = Path.Combine(dir, ExeName);
         MakeLink(LinkPath(Environment.SpecialFolder.Programs), exe, dir, "");
         if (desktopLink) MakeLink(LinkPath(Environment.SpecialFolder.DesktopDirectory), exe, dir, "");
+        // "Start with Windows": opens hidden in the tray, so the browser extension works right after sign-in.
+        if (startupLink == true) MakeLink(LinkPath(Environment.SpecialFolder.Startup), exe, dir, "-Background");
+        else if (startupLink == false) TryDeleteFile(LinkPath(Environment.SpecialFolder.Startup));
         Register(dir);
         try
         {
@@ -425,7 +445,7 @@ class SetupForm : Form
     static readonly Color Gray = Color.FromArgb(100, 116, 139);
 
     readonly TextBox dirBox = new TextBox();
-    readonly CheckBox desktop = new CheckBox(), openNow = new CheckBox();
+    readonly CheckBox desktop = new CheckBox(), startup = new CheckBox(), openNow = new CheckBox();
     readonly ProgressBar bar = new ProgressBar();
     readonly Label status = new Label();
     readonly Button install = new Button(), cancel = new Button(), browse = new Button(), finish = new Button(), browserBtn = new Button();
@@ -464,16 +484,20 @@ class SetupForm : Form
         browse.Text = "Change...";
         browse.Click += delegate { PickFolder(); };
         page1.Add(browse);
-        desktop.SetBounds(24, 178, 400, 26);
+        desktop.SetBounds(24, 172, 400, 26);
         desktop.Text = "Put an icon on the desktop";
         desktop.Checked = true;
         page1.Add(desktop);
-        page1.Add(new Label { Location = new Point(24, 208), AutoSize = true, ForeColor = Gray, Font = new Font("Segoe UI", 9F),
+        startup.SetBounds(24, 198, 500, 26);
+        startup.Text = "Start with Windows (in the tray, so the browser button always works)";
+        startup.Checked = !Setup.IsInstalled(dir) || Setup.StartupOn(); // update: keep the user's choice
+        page1.Add(startup);
+        page1.Add(new Label { Location = new Point(24, 228), AutoSize = true, ForeColor = Gray, Font = new Font("Segoe UI", 9F),
             Text = "Everything is included (Node.js, yt-dlp, ffmpeg). No admin rights, no internet needed to install." });
-        bar.SetBounds(24, 246, 512, 10);
+        bar.SetBounds(24, 252, 512, 10);
         bar.Visible = false;
         page1.Add(bar);
-        status.SetBounds(24, 262, 512, 22);
+        status.SetBounds(24, 266, 512, 22);
         status.ForeColor = Gray;
         page1.Add(status);
         cancel.SetBounds(300, 290, 104, 36);
@@ -534,16 +558,16 @@ class SetupForm : Form
         catch { MessageBox.Show(this, "That folder path is not valid.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
         dirBox.Text = dir;
         busy = true;
-        install.Enabled = cancel.Enabled = browse.Enabled = dirBox.Enabled = desktop.Enabled = false;
+        install.Enabled = cancel.Enabled = browse.Enabled = dirBox.Enabled = desktop.Enabled = startup.Enabled = false;
         bar.Visible = true;
-        bool wantDesktop = desktop.Checked;
+        bool wantDesktop = desktop.Checked, wantStartup = startup.Checked;
 
         var t = new Thread(delegate ()
         {
             string error = null;
             try
             {
-                Setup.Install(dir, wantDesktop, delegate (int pct, string msg)
+                Setup.Install(dir, wantDesktop, wantStartup, delegate (int pct, string msg)
                 {
                     BeginInvoke((MethodInvoker)delegate { bar.Value = Math.Max(0, Math.Min(100, pct)); status.Text = msg; });
                 });
@@ -563,7 +587,7 @@ class SetupForm : Form
         {
             bar.Visible = false;
             status.Text = "";
-            install.Enabled = cancel.Enabled = browse.Enabled = dirBox.Enabled = desktop.Enabled = true;
+            install.Enabled = cancel.Enabled = browse.Enabled = dirBox.Enabled = desktop.Enabled = startup.Enabled = true;
             MessageBox.Show(this, error, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }

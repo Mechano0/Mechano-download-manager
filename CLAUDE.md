@@ -40,13 +40,17 @@ History of the old chats (lost with the 2026-11-01 Windows reinstall), read it f
 - Data: `data/` (config.json has the private token — never share/copy). Downloads: `%USERPROFILE%\Downloads\M.DM\<Category>`.
 
 ## Commands
-- Tests: `node --test test/` (44 tests, all offline).
+- Tests: `tools\node\node.exe --test test/` with env `MDM_NO_SCAN=1` (45 tests, all offline).
 - Release: bump `package.json` version → `build-setup.ps1 -Rebuild` → `node tools/sign-release.js --notes "..."` → upload `Mechano.DM.Setup.exe`,
   `Mechano.DM.zip`, `version.json` to a GitHub release `v<version>`. Small ffmpeg: artifact `ffmpeg-win64` of `.github/workflows/ffmpeg.yml` → `tools\ffmpeg\out\`.
 - Execution policy is Bypass for CurrentUser: run scripts as `powershell -File x.ps1` (no `-ExecutionPolicy` flag).
 - Portable build: `powershell -ExecutionPolicy Bypass -File build-portable.ps1` → `dist\Mechano DM.zip` (bundles node, yt-dlp, ffmpeg, lib).
 - Installer: `powershell -ExecutionPolicy Bypass -File build-setup.ps1 [-Rebuild]` → `dist\Mechano DM Setup.exe` (~55 MB, source `desktop/Setup.cs`,
-  LZX cab via makecab + setupapi; per-user install to %LOCALAPPDATA%\Programs\Mechano DM, Uninstall.exe, `/silent /dir= /nolaunch /nodesktop` for tests).
+  LZX cab via makecab + setupapi; per-user install to %LOCALAPPDATA%\Programs\Mechano DM, Uninstall.exe, `/silent /dir= /nolaunch /nodesktop /nostartup` for tests).
+  "Start with Windows" (Startup\Mechano Download Manager.lnk, `-Background` = tray only): ON by default for a NEW install (checkbox in
+  the Setup window); an update (folder already installed, incl. self-update) keeps the user's choice; `/nostartup` leaves it untouched.
+  Test installs share the real shortcuts: always pass `/nostartup`, use a short `/dir=` (long paths fail), and after running a test
+  `Uninstall.exe` re-run the real Setup `/silent /nolaunch` (uninstall removes the Start-menu, desktop, Startup links and Apps entry).
 - Restart the app after engine/UI changes: stop process `Mechano DM`, start `Mechano DM.exe` (UI-only changes: F5 in the window).
 - Shortcuts: `desktop\install-shortcut.ps1`. Icons: `node assets/build-icon.js <ffmpeg>` from `assets/logo-source.png`.
 
